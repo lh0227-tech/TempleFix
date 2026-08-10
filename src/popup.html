@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>翻译结果</title>
+  <link rel="stylesheet" href="styles/base.css" />
+  <link rel="stylesheet" href="styles/popup.css" />
+</head>
+<body>
+  <div class="popup">
+    <div class="header">
+      <span class="dot"></span>
+      <span class="title" id="title">太阳穴</span>
+      <div class="actions">
+        <button class="icon-btn" id="copy" title="复制译文">📋</button>
+        <button class="icon-btn close" id="close" title="关闭 (ESC)">✕</button>
+      </div>
+    </div>
+
+    <div class="content" id="content">
+      <div class="loading">
+        <div class="spinner"></div>
+        <span>浮窗已加载 v2…</span>
+      </div>
+    </div>
+
+    <div class="footer">
+      <button class="btn btn-ghost" id="retranslate">重新翻译</button>
+      <button class="btn btn-ghost" id="copy2">复制译文</button>
+    </div>
+  </div>
+
+  <script src="js/util.js"></script>
+  <script src="js/popup.js"></script>
+</body>
+</html>

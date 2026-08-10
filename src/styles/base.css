@@ -1,0 +1,125 @@
+/* ===== 太阳穴 TempleFix - 全局基础样式 ===== */
+
+:root {
+  /* 配色：深色为主，呼应图标 */
+  --bg: #1a1a2e;
+  --bg-2: #16213e;
+  --surface: rgba(30, 30, 50, 0.85);
+  --surface-solid: #1e1e32;
+  --border: rgba(255, 255, 255, 0.12);
+  --border-strong: rgba(255, 255, 255, 0.25);
+  --text: #f0f0f5;
+  --text-dim: #a0a0b8;
+  --text-faint: #6b6b80;
+  --accent: #ffd300;
+  --accent-2: #ff8800;
+  --accent-press: #e6bf00;
+  --danger: #ff5a5a;
+  --success: #5aff9a;
+
+  /* 圆角 / 阴影 */
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+
+  /* 字体 */
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei",
+    "PingFang SC", sans-serif;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+html,
+body {
+  height: 100%;
+  font-family: var(--font);
+  color: var(--text);
+  background: transparent;
+  overflow: hidden;
+  font-size: 14px;
+}
+
+button {
+  font-family: var(--font);
+  cursor: pointer;
+  border: none;
+  outline: none;
+  background: none;
+  color: inherit;
+}
+
+input,
+select,
+textarea {
+  font-family: var(--font);
+}
+
+/* 毛玻璃容器：支持 backdrop-filter 用毛玻璃，不支持降级纯色半透明 */
+.glass {
+  background: var(--surface);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+  border: 1px solid var(--border);
+}
+
+/* 不支持 backdrop-filter 时降级（由 JS 加 .no-blur 类） */
+.no-blur .glass {
+  background: rgba(20, 20, 36, 0.92);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* 通用按钮 */
+.btn {
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  transition: background 0.12s, border-color 0.12s, transform 0.05s;
+}
+.btn:hover {
+  background: #2a2a44;
+  border-color: var(--border-strong);
+}
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #1a1a2e;
+  font-weight: 600;
+  border: none;
+}
+.btn-primary:hover {
+  background: linear-gradient(135deg, var(--accent-press), var(--accent-2));
+}
+
+.btn-ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+}
+.btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

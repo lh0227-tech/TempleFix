@@ -1,0 +1,12 @@
+TempleFix
+Copyright 2026 TempleFix contributors
+
+The optional enhanced OCR component includes software and model files from:
+
+- RapidOCR, Copyright RapidAI contributors, Apache License 2.0
+- PaddleOCR / PP-OCR, Copyright PaddlePaddle / Baidu and contributors,
+  Apache License 2.0
+- ONNX Runtime, Copyright Microsoft Corporation, MIT License
+
+TempleFix is not affiliated with or endorsed by those upstream projects.
+Complete third-party license texts are included with the optional component.

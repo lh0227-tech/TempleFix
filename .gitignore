@@ -1,0 +1,35 @@
+/src-tauri/target/
+/rapidocr-addon/build/
+/rapidocr-addon/release/
+/rapidocr-addon/modelscope-upload/
+/rapidocr-addon/.venv/
+**/__pycache__/
+/.pytest_cache/
+/node_modules/
+
+# Local-only project notes and runtime configuration
+/交接文档.md
+/settings.json
+/.env
+/.env.*
+!/.env.example
+
+# Logs, crash dumps, and generated binaries
+/debug.log
+*.pdb
+*.log
+*.dmp
+
+# Personal editor and operating-system files
+/.agents/
+/.codex/
+/.vscode/
+/.idea/
+/.vs/
+*.user
+*.suo
+*.bak
+*.tmp
+.DS_Store
+Thumbs.db
+Desktop.ini

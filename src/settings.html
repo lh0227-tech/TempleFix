@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>太阳穴 - 首选项</title>
+  <link rel="stylesheet" href="styles/base.css" />
+  <link rel="stylesheet" href="styles/settings.css" />
+</head>
+<body>
+  <h1>太阳穴 · 首选项</h1>
+  <p class="sub">填好语言模型就能用。增强 OCR 和多模态都按需选择。</p>
+
+  <!-- ===== 语言模型（主力）===== -->
+  <div class="section-title">语言模型（主力翻译）</div>
+  <div class="field">
+    <label>翻译服务</label>
+    <select id="llm_provider"></select>
+    <div class="desc">用来纠错+翻译 OCR 识别出的文字。推荐 DeepSeek，便宜快</div>
+  </div>
+  <div class="field">
+    <label>接口地址 (Base URL)</label>
+    <input id="llm_base_url" type="text" placeholder="https://..." />
+  </div>
+  <div class="field">
+    <label>模型名称</label>
+    <input id="llm_model" type="text" placeholder="deepseek-v4-flash" />
+  </div>
+  <div class="field">
+    <label>API Key（密钥）</label>
+    <input id="llm_api_key" type="password" placeholder="粘贴你的密钥" />
+  </div>
+
+  <!-- ===== RapidOCR（本地选装）===== -->
+  <div class="section-title">增强离线 OCR（选装）</div>
+  <div class="component-card" id="rapidocr_card">
+    <div class="component-head">
+      <div>
+        <div class="component-name">
+          <span class="status-dot" id="rapidocr_dot"></span>
+          RapidOCR · PP-OCRv6 small
+        </div>
+        <div class="desc" id="rapidocr_status">正在检查组件...</div>
+      </div>
+      <label class="switch" title="安装后优先使用增强 OCR">
+        <input type="checkbox" id="use_rapidocr" />
+        <span class="slider"></span>
+      </label>
+    </div>
+    <div class="component-copy">
+      图片只在本机识别。一个组件覆盖中、英、日及多种拉丁文字，并提供每行置信度来过滤乱码。
+    </div>
+    <div class="component-actions">
+      <button class="btn btn-primary" id="rapidocr_install" type="button">一键安装</button>
+      <button class="btn btn-danger-soft" id="rapidocr_uninstall" type="button">卸载</button>
+      <span class="component-busy" id="rapidocr_busy"></span>
+    </div>
+    <button class="component-local-link" id="rapidocr_local_install" type="button">
+      高级：从本地 ZIP 安装
+    </button>
+    <details class="license-note">
+      <summary>开源项目与许可证</summary>
+      <p>RapidOCR 与 PaddleOCR：Apache 2.0；ONNX Runtime：MIT。版权归各项目权利人所有，太阳穴与上游项目无隶属或官方合作关系。</p>
+    </details>
+  </div>
+
+  <!-- ===== 多模态（保底，可选）===== -->
+  <div class="section-title">
+    <span>多模态保底（可选）</span>
+    <label class="switch">
+      <input type="checkbox" id="use_multimodal" />
+      <span class="slider"></span>
+    </label>
+  </div>
+  <div id="mm_fields" class="mm-fields">
+    <div class="desc mm-desc">OCR 识别不到文字、或文字太少时，用多模态大模型直接看图翻译。不配也能用。</div>
+    <div class="field">
+      <label>多模态服务</label>
+      <select id="mm_provider"></select>
+    </div>
+    <div class="field">
+      <label>接口地址</label>
+      <input id="mm_base_url" type="text" placeholder="https://..." />
+    </div>
+    <div class="field">
+      <label>模型名称</label>
+      <input id="mm_model" type="text" placeholder="doubao-seed-2-1-turbo-260628" />
+    </div>
+    <div class="field">
+      <label>API Key</label>
+      <input id="mm_api_key" type="password" placeholder="多模态的密钥" />
+    </div>
+    <div class="field">
+      <label>短文字阈值</label>
+      <input id="multimodal_threshold" type="number" min="1" max="50" />
+      <div class="desc">OCR 识别到的文字少于此字数时，提示是否改用多模态（默认 5）</div>
+    </div>
+  </div>
+
+  <!-- ===== 通用 ===== -->
+  <div class="section-title">通用</div>
+  <div class="row2">
+    <div class="field">
+      <label>我的母语</label>
+      <select id="native_lang">
+        <option>简体中文</option>
+        <option>繁體中文</option>
+        <option>English</option>
+        <option>日本語</option>
+        <option>한국어</option>
+        <option>Français</option>
+        <option>Português</option>
+        <option>Español</option>
+      </select>
+      <div class="desc">默认翻译成这个语言</div>
+    </div>
+    <div class="field">
+      <label>翻译成</label>
+      <select id="target_lang">
+        <option value="">默认（用母语）</option>
+        <option>简体中文</option>
+        <option>繁體中文</option>
+        <option>English</option>
+        <option>日本語</option>
+        <option>한국어</option>
+        <option>Français</option>
+        <option>Português</option>
+        <option>Español</option>
+      </select>
+      <div class="desc">留空就用母语，选了就翻成指定的</div>
+    </div>
+    <div class="field">
+      <label>原文语言</label>
+      <select id="source_lang">
+        <option value="">自动识别</option>
+        <option>简体中文</option>
+        <option>繁體中文</option>
+        <option>English</option>
+        <option>日本語</option>
+        <option>한국어</option>
+        <option>Français</option>
+        <option>Português</option>
+        <option>Español</option>
+      </select>
+      <div class="desc" id="source_lang_desc">装了增强组件后可直接使用其支持的语言；未安装时使用 Windows 自带 OCR</div>
+    </div>
+    <div class="field">
+      <label>截图快捷键</label>
+      <input id="hotkey" type="text" placeholder="Alt+Z" />
+      <div class="desc">保存后立即生效，例如 Alt+Z、Ctrl+Shift+X</div>
+    </div>
+  </div>
+
+  <div class="bottom">
+    <button class="btn btn-primary" id="save">保存</button>
+    <span class="save-status" id="status">已保存</span>
+  </div>
+
+  <div class="install-modal" id="rapidocr_modal" aria-hidden="true">
+    <div class="install-dialog" role="dialog" aria-modal="true" aria-labelledby="rapidocr_modal_title">
+      <div class="install-hero" id="rapidocr_modal_icon">↓</div>
+      <h2 id="rapidocr_modal_title">安装增强离线 OCR</h2>
+      <p class="install-summary" id="rapidocr_modal_summary"></p>
+
+      <div class="install-facts" id="rapidocr_modal_facts">
+        <div><span>下载</span><strong id="rapidocr_download_size">—</strong></div>
+        <div><span>安装后</span><strong id="rapidocr_installed_size">—</strong></div>
+        <div><span>来源</span><strong id="rapidocr_source_name">—</strong></div>
+      </div>
+
+      <div class="install-progress-wrap" id="rapidocr_progress_wrap">
+        <div class="install-progress-track">
+          <span class="install-progress-bar" id="rapidocr_progress_bar"></span>
+        </div>
+        <div class="install-progress-meta">
+          <span id="rapidocr_progress_detail">准备中…</span>
+          <strong id="rapidocr_progress_percent">0%</strong>
+        </div>
+        <div class="install-steps">
+          <span id="rapidocr_step_download">1 下载</span>
+          <span id="rapidocr_step_verify">2 校验</span>
+          <span id="rapidocr_step_install">3 安装</span>
+        </div>
+      </div>
+
+      <p class="install-error" id="rapidocr_modal_error"></p>
+      <p class="install-privacy">安装过程清楚可见。图片识别始终在本机完成，不会上传到组件来源。</p>
+
+      <div class="install-dialog-actions">
+        <button class="btn" id="rapidocr_modal_cancel" type="button">取消</button>
+        <button class="btn btn-primary" id="rapidocr_modal_start" type="button">开始安装</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/util.js"></script>
+  <script src="js/settings.js"></script>
+</body>
+</html>

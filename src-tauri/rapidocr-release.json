@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "version": "3.9.2-1",
+  "package_name": "TempleFix_RapidOCR_Addon_3.9.2-1.zip",
+  "package_bytes": 97445269,
+  "installed_bytes": 217049422,
+  "sha256": "5D43C5BAF2A76434765FDFCF529921640653D6CFB56ADF35ADF4F39A138523D1",
+  "sources": [
+    {
+      "name": "魔搭 ModelScope（中国大陆）",
+      "url": "https://www.modelscope.cn/models/lh0227/TempleFix-RapidOCR-Addon/resolve/v3.9.2-1/TempleFix_RapidOCR_Addon_3.9.2-1.zip"
+    }
+  ]
+}

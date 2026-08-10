@@ -1,0 +1,20 @@
+TempleFix RapidOCR optional component - third-party notices
+
+RapidOCR
+Copyright RapidAI contributors.
+Licensed under the Apache License, Version 2.0.
+https://github.com/RapidAI/RapidOCR
+
+PaddleOCR and PP-OCR model files
+Copyright PaddlePaddle / Baidu and contributors.
+Licensed under the Apache License, Version 2.0.
+https://github.com/PaddlePaddle/PaddleOCR
+
+ONNX Runtime
+Copyright Microsoft Corporation.
+Licensed under the MIT License.
+https://github.com/microsoft/onnxruntime
+
+The packaged component also contains Python and Python libraries. Their
+complete license files are included in the component's licenses directory.
+TempleFix is not affiliated with or endorsed by these upstream projects.
