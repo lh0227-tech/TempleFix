@@ -173,7 +173,8 @@ cargo test --manifest-path src-tauri/Cargo.toml
 构建 MSI：
 
 ```powershell
-cargo tauri build --manifest-path src-tauri/Cargo.toml
+cd src-tauri
+cargo tauri build
 ```
 
 增强 OCR 组件的源码、依赖清单和打包脚本位于 `rapidocr-addon` 目录。构建产物不会提交到源码仓库。
