@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <title>翻译结果</title>
+  <title data-i18n="popup_title">翻译结果</title>
   <link rel="stylesheet" href="styles/base.css" />
   <link rel="stylesheet" href="styles/popup.css" />
 </head>
@@ -12,25 +12,27 @@
       <span class="dot"></span>
       <span class="title" id="title">太阳穴</span>
       <div class="actions">
-        <button class="icon-btn" id="copy" title="复制译文">📋</button>
-        <button class="icon-btn close" id="close" title="关闭 (ESC)">✕</button>
+        <button class="icon-btn" id="copy" title="复制译文" data-i18n-title="copy_translation">📋</button>
+        <button class="icon-btn close" id="close" title="关闭 (ESC)" data-i18n-title="close_esc">✕</button>
       </div>
     </div>
 
     <div class="content" id="content">
       <div class="loading">
         <div class="spinner"></div>
-        <span>浮窗已加载 v2…</span>
+        <span data-i18n="loading">正在加载…</span>
       </div>
     </div>
 
     <div class="footer">
-      <button class="btn btn-ghost" id="retranslate">重新翻译</button>
-      <button class="btn btn-ghost" id="copy2">复制译文</button>
+      <button class="btn btn-ghost" id="retranslate" data-i18n="retranslate">重新翻译</button>
+      <button class="btn btn-ghost" id="copy2" data-i18n="copy_translation">复制译文</button>
     </div>
   </div>
 
   <script src="js/util.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/ui-translations.js"></script>
   <script src="js/popup.js"></script>
 </body>
 </html>

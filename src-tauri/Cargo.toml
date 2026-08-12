@@ -24,7 +24,10 @@ image = "0.25"
 base64 = "0.22"
 sha2 = "0.10"
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-updater = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+semver = "1"
+minisign-verify = "0.2"
 tokio = { version = "1", features = ["full"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 

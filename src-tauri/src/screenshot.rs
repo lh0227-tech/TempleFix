@@ -1,6 +1,6 @@
 //! 截图模块
 //!
-//! 负责：截全屏（存全局缓存）、按 CSS 坐标 + 窗口逻辑尺寸裁剪选区。
+//! 负责：截取鼠标所在显示器（存全局缓存）、按 CSS 坐标 + 窗口逻辑尺寸裁剪选区。
 //! DPI 缩放：前端传 CSS 像素坐标，后端用 截图物理尺寸/窗口逻辑尺寸 算出 scale 换算后裁剪。
 
 use image::ImageFormat;
@@ -30,14 +30,25 @@ pub struct ShotCache {
     pub image: Mutex<Option<image::RgbaImage>>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct CaptureInfo {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
 pub fn new_cache() -> ShotCache {
     ShotCache {
         image: Mutex::new(None),
     }
 }
 
-/// 截全屏（主显示器），存入全局缓存，返回截图物理尺寸 (宽, 高)
-pub fn capture_full(app: &tauri::AppHandle) -> Result<(u32, u32), String> {
+/// 截取鼠标所在显示器；读取鼠标或目标显示器失败时安全回退主显示器。
+pub fn capture_full(
+    app: &tauri::AppHandle,
+    cursor: Option<(i32, i32)>,
+) -> Result<CaptureInfo, String> {
     log_debug("capture_full 开始");
     // 截图失败时不能继续误用上一次的画面。
     *app.state::<ShotCache>().image.lock().unwrap() = None;
@@ -48,35 +59,43 @@ pub fn capture_full(app: &tauri::AppHandle) -> Result<(u32, u32), String> {
     })?;
     log_debug(&format!("找到 {} 个显示器", monitors.len()));
     let primary = monitors
-        .into_iter()
+        .iter()
         .find(|m| m.is_primary().unwrap_or(false))
-        .or_else(|| {
-            Monitor::all()
-                .ok()
-                .and_then(|ms| ms.into_iter().next())
-        })
+        .cloned()
+        .or_else(|| monitors.first().cloned())
         .ok_or_else(|| "找不到显示器".to_string())?;
+    let selected = cursor
+        .and_then(|(x, y)| Monitor::from_point(x, y).ok())
+        .unwrap_or(primary);
+    let monitor_x = selected.x().unwrap_or(0);
+    let monitor_y = selected.y().unwrap_or(0);
 
     log_debug("开始截屏...");
-    let img = primary
-        .capture_image()
-        .map_err(|e| {
-            let msg = format!("截图失败：{e}");
-            log_debug(&msg);
-            msg
-        })?;
+    let img = selected.capture_image().map_err(|e| {
+        let msg = format!("截图失败：{e}");
+        log_debug(&msg);
+        msg
+    })?;
 
     let (w, h) = (img.width(), img.height());
     log_debug(&format!("截屏成功 {w}x{h}"));
 
     let state = app.state::<ShotCache>();
     *state.image.lock().unwrap() = Some(img);
+    let info = CaptureInfo {
+        x: monitor_x,
+        y: monitor_y,
+        width: w,
+        height: h,
+    };
     log_debug("已存入缓存");
 
-    Ok((w, h))
+    Ok(info)
 }
 
 /// 裁剪选区
+// 参数分别来自 CSS 选区、窗口和物理截图尺寸，展开后更容易核对 DPI 换算。
+#[allow(clippy::too_many_arguments)]
 pub fn crop_region(
     app: &tauri::AppHandle,
     css_x: i32,
@@ -116,8 +135,7 @@ pub fn crop_region(
         return Err("截图裁剪失败：选区无效".to_string());
     }
 
-    let sub = image::imageops::crop_imm(img, x0, y0, x1 - x0, y1 - y0)
-        .to_image();
+    let sub = image::imageops::crop_imm(img, x0, y0, x1 - x0, y1 - y0).to_image();
 
     // RGBA 转 RGB，避免透明通道影响 OCR。
     let mut rgb = image::DynamicImage::ImageRgba8(sub).to_rgb8();
@@ -127,12 +145,7 @@ pub fn crop_region(
     if rgb.width() > MAX_W {
         let ratio = MAX_W as f32 / rgb.width() as f32;
         let new_h = (rgb.height() as f32 * ratio).round() as u32;
-        rgb = image::imageops::resize(
-            &rgb,
-            MAX_W,
-            new_h,
-            image::imageops::FilterType::Lanczos3,
-        );
+        rgb = image::imageops::resize(&rgb, MAX_W, new_h, image::imageops::FilterType::Lanczos3);
     }
 
     // OCR 主通道使用无损 PNG，避免小号中文被 JPEG 压缩成空结果。
@@ -141,10 +154,7 @@ pub fn crop_region(
     image::DynamicImage::ImageRgb8(rgb)
         .write_to(&mut buf, ImageFormat::Png)
         .map_err(|e| format!("截图编码失败：{e}"))?;
-    let b64 = base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        buf.into_inner(),
-    );
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buf.into_inner());
     Ok(format!("data:image/png;base64,{b64}"))
 }
 
@@ -160,9 +170,7 @@ pub fn shot_hash(data_uri: &str) -> String {
 pub fn full_data_uri(app: &tauri::AppHandle) -> Result<String, String> {
     let state = app.state::<ShotCache>();
     let guard = state.image.lock().unwrap();
-    let img = guard
-        .as_ref()
-        .ok_or_else(|| "截图缓存为空".to_string())?;
+    let img = guard.as_ref().ok_or_else(|| "截图缓存为空".to_string())?;
     // 放大镜不需要原分辨率，缩小到一半省内存
     let resized = if img.width() > 2000 {
         image::imageops::resize(
@@ -180,10 +188,7 @@ pub fn full_data_uri(app: &tauri::AppHandle) -> Result<String, String> {
     image::DynamicImage::ImageRgb8(rgb)
         .write_to(&mut buf, ImageFormat::Jpeg)
         .map_err(|e| format!("截图编码失败：{e}"))?;
-    let b64 = base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        buf.into_inner(),
-    );
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buf.into_inner());
     Ok(format!("data:image/jpeg;base64,{b64}"))
 }
 

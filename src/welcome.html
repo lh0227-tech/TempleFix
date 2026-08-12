@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TempleFix</title>
+  <link rel="stylesheet" href="styles/base.css" />
+  <link rel="stylesheet" href="styles/welcome.css" />
+</head>
+<body>
+  <main class="wizard" aria-live="polite">
+    <header class="wizard-head">
+      <div class="brand-mark" aria-hidden="true"><span></span></div>
+      <strong data-i18n="app_name">TempleFix</strong>
+      <button class="skip-button" id="skip" type="button" data-i18n="skip">Set up later</button>
+    </header>
+
+    <div class="progress" aria-hidden="true">
+      <span class="active"></span><span></span><span></span><span></span>
+    </div>
+
+    <section class="step active" data-step="welcome">
+      <div class="interface-language-gateway">
+        <label for="ui_language">选择界面语言 / Choose interface language</label>
+        <select id="ui_language">
+          <option value="zh-CN">简体中文 / Chinese (Simplified)</option>
+          <option value="en">English / 英语</option>
+          <option value="ja">日本語 / Japanese</option>
+          <option value="fr">Français / French</option>
+          <option value="de">Deutsch / German</option>
+          <option value="es">Español / Spanish</option>
+          <option value="pt-BR">Português (Brasil) / Portuguese (Brazil)</option>
+        </select>
+        <span class="language-status" id="language_status" role="status"></span>
+      </div>
+      <div class="hero-icon" aria-hidden="true">文</div>
+      <h1 data-i18n="welcome_title">Welcome to TempleFix</h1>
+      <p class="lead" data-i18n="welcome_lead"></p>
+      <div class="plain-card">
+        <p data-i18n="welcome_local"></p>
+        <p data-i18n="welcome_key"></p>
+      </div>
+      <div class="language-grid">
+        <label>
+          <span data-i18n="native_language">Translate into</span>
+          <select id="native_language">
+            <option value="简体中文">简体中文</option>
+            <option value="繁體中文">繁體中文</option>
+            <option value="English">English</option>
+            <option value="日本語">日本語</option>
+            <option value="Français">Français</option>
+            <option value="Deutsch">Deutsch</option>
+            <option value="Español">Español</option>
+            <option value="Português">Português</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <section class="step" data-step="service">
+      <div class="step-kicker">02</div>
+      <h1 data-i18n="service_title">Set up AI translation</h1>
+      <p class="lead" data-i18n="service_lead"></p>
+      <div class="service-grid">
+        <label>
+          <span data-i18n="provider">Service type</span>
+          <select id="llm_provider"></select>
+        </label>
+        <label>
+          <span data-i18n="base_url">Base URL</span>
+          <input id="llm_base_url" type="url" autocomplete="off" placeholder="https://..." />
+        </label>
+        <label>
+          <span data-i18n="model">Model</span>
+          <input id="llm_model" type="text" autocomplete="off" placeholder="deepseek-v4-flash" />
+        </label>
+        <label>
+          <span data-i18n="api_key">API key</span>
+          <input id="llm_api_key" type="password" autocomplete="off" data-i18n-placeholder="api_key_placeholder" />
+        </label>
+      </div>
+      <div class="test-row">
+        <button class="secondary-button" id="test_connection" type="button" data-i18n="test_connection">Test connection</button>
+        <span class="test-status" id="test_status" role="status"></span>
+      </div>
+      <p class="privacy-note" data-i18n="welcome_key"></p>
+    </section>
+
+    <section class="step" data-step="ocr">
+      <div class="step-kicker">03</div>
+      <h1 data-i18n="ocr_title">Enhanced OCR is optional</h1>
+      <p class="lead" data-i18n="ocr_lead"></p>
+      <div class="ocr-card">
+        <span class="ocr-dot" id="ocr_dot"></span>
+        <div>
+          <strong>RapidOCR · PP-OCRv6 small</strong>
+          <p id="ocr_status"></p>
+        </div>
+      </div>
+      <button class="secondary-button" id="open_preferences" type="button" data-i18n="open_preferences">Manage in Preferences</button>
+    </section>
+
+    <section class="step" data-step="finish">
+      <div class="success-mark" aria-hidden="true">✓</div>
+      <h1 data-i18n="finish_title">You are ready</h1>
+      <p class="lead" data-i18n="finish_lead"></p>
+      <div class="finish-card">
+        <p id="finish_service"></p>
+        <p data-i18n="finish_hotkey"></p>
+      </div>
+    </section>
+
+    <footer class="wizard-foot">
+      <button class="secondary-button hidden" id="back" type="button" data-i18n="back">Back</button>
+      <span class="spacer"></span>
+      <button class="primary-button" id="next" type="button" data-i18n="next">Next</button>
+      <button class="primary-button hidden" id="finish" type="button" data-i18n="finish">Finish and start</button>
+    </footer>
+  </main>
+
+  <script src="js/util.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/ui-translations.js"></script>
+  <script src="js/welcome.js"></script>
+</body>
+</html>

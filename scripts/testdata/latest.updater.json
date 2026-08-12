@@ -1,0 +1,11 @@
+{
+  "version": "1.2.3-beta.1",
+  "notes": "Updater mirror test fixture",
+  "pub_date": "2026-08-12T00:00:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dGVzdC1zaWduYXR1cmU=",
+      "url": "https://github.com/lh0227-tech/TempleFix/releases/download/templefix-v1.2.3/TempleFix.msi.zip"
+    }
+  }
+}

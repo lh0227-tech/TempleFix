@@ -17,7 +17,11 @@ fn main() {
             let primary = monitors
                 .into_iter()
                 .find(|m| m.is_primary().unwrap_or(false))
-                .or_else(|| xcap::Monitor::all().ok().and_then(|ms| ms.into_iter().next()));
+                .or_else(|| {
+                    xcap::Monitor::all()
+                        .ok()
+                        .and_then(|ms| ms.into_iter().next())
+                });
             match primary {
                 Some(m) => {
                     println!("用主显示器截图...");

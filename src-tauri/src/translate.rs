@@ -46,6 +46,22 @@ fn preview(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
 }
 
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct SelectionContext {
+    pub css_x: f64,
+    pub css_y: f64,
+    pub css_w: f64,
+    pub css_h: f64,
+    pub win_w: f64,
+    pub win_h: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct OverlayLine {
+    pub text: String,
+    pub rect: crate::ocr::OcrRect,
+}
+
 /// 统一返回格式（文档 3.3）
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TranslateResult {
@@ -55,6 +71,8 @@ pub struct TranslateResult {
     pub error: Option<String>,
     pub error_code: Option<String>,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlay_lines: Vec<OverlayLine>,
 }
 
 impl TranslateResult {
@@ -66,6 +84,7 @@ impl TranslateResult {
             error: None,
             error_code: None,
             model,
+            overlay_lines: Vec::new(),
         }
     }
     pub fn err(code: &str, msg: String, model: String) -> Self {
@@ -76,6 +95,19 @@ impl TranslateResult {
             error: Some(msg),
             error_code: Some(code.into()),
             model,
+            overlay_lines: Vec::new(),
+        }
+    }
+
+    fn err_with_original(code: &str, msg: String, model: String, original: String) -> Self {
+        TranslateResult {
+            success: false,
+            original,
+            translated: String::new(),
+            error: Some(msg),
+            error_code: Some(code.into()),
+            model,
+            overlay_lines: Vec::new(),
         }
     }
 }
@@ -107,6 +139,7 @@ pub struct LastResult {
     pub result: Mutex<Option<TranslateResult>>,
     pub data_uri: Mutex<Option<String>>,
     pub target_lang: Mutex<Option<String>>,
+    pub selection: Mutex<Option<SelectionContext>>,
 }
 
 impl LastResult {
@@ -115,26 +148,31 @@ impl LastResult {
             result: Mutex::new(None),
             data_uri: Mutex::new(None),
             target_lang: Mutex::new(None),
+            selection: Mutex::new(None),
         }
     }
-    pub fn set(&self, result: TranslateResult, data_uri: String, target_lang: String) {
+    pub fn set(
+        &self,
+        result: TranslateResult,
+        data_uri: String,
+        target_lang: String,
+        selection: Option<SelectionContext>,
+    ) {
         *self.result.lock().unwrap() = Some(result);
         *self.data_uri.lock().unwrap() = Some(data_uri);
         *self.target_lang.lock().unwrap() = Some(target_lang);
+        *self.selection.lock().unwrap() = selection;
     }
 }
 
 /// 翻译参数
 pub struct TranslateParams {
-    pub data_uri: String,   // 截图 data URI
+    pub data_uri: String,    // 截图 data URI
     pub target_lang: String, // 目标语言（空则用母语，由调用方处理）
 }
 
 /// 顶层翻译入口：OCR优先 -> DeepSeek纠错翻译 -> 短文本且开多模态则提示
-pub async fn translate(
-    app: &AppHandle,
-    params: TranslateParams,
-) -> TranslateResult {
+pub async fn translate(app: &AppHandle, params: TranslateParams) -> TranslateResult {
     let cfg = config::load(app);
     // 目标语言：target_lang 空就用母语
     let target_lang = if params.target_lang.trim().is_empty() {
@@ -169,7 +207,7 @@ pub async fn translate(
     // 2. OCR 提取文本（在阻塞线程跑，避免卡 async runtime）
     let source_lang = cfg.source_lang.clone();
     let use_rapidocr = cfg.use_rapidocr;
-    let (ocr_text, ocr_error) = {
+    let (ocr_result, ocr_error) = {
         let bytes = img_bytes.clone();
         let sl = source_lang.clone();
         let worker_app = app.clone();
@@ -178,27 +216,30 @@ pub async fn translate(
         })
         .await
         {
-            Ok(Ok(text)) => {
+            Ok(Ok(result)) => {
                 log_debug(&format!(
                     "OCR结果: {:?} ({}字符)",
-                    preview(&text, 60),
-                    text.chars().count()
+                    preview(&result.text, 60),
+                    result.text.chars().count()
                 ));
-                (text, None)
+                (result, None)
             }
             Ok(Err(e)) => {
                 log_debug(&format!("OCR失败: {e}"));
-                (String::new(), Some(e))
+                (crate::ocr::OcrResult::default(), Some(e))
             }
             Err(e) => {
                 log_debug(&format!("OCR线程失败: {e}"));
-                (String::new(), Some(format!("OCR 线程失败：{e}")))
+                (
+                    crate::ocr::OcrResult::default(),
+                    Some(format!("OCR 线程失败：{e}")),
+                )
             }
         }
     };
 
     // 3. OCR 结果为空 -> 直接走多模态保底（如果开了）
-    if ocr_text.trim().is_empty() {
+    if ocr_result.text.trim().is_empty() {
         if cfg.use_multimodal {
             if cfg.mm_api_key.trim().is_empty() {
                 return TranslateResult::err(
@@ -217,8 +258,7 @@ pub async fn translate(
             log_debug("OCR空，走多模态保底");
             let result = multimodal_translate(app, &params).await;
             if result.success {
-                app.state::<TranslateCache>()
-                    .set(cache_key, result.clone());
+                app.state::<TranslateCache>().set(cache_key, result.clone());
             }
             return result;
         }
@@ -233,36 +273,75 @@ pub async fn translate(
     }
 
     // 4. OCR 结果很短且开了多模态 -> 提示用户选
-    let char_count = ocr_text.chars().count() as u32;
-    if char_count < cfg.multimodal_threshold && cfg.use_multimodal && !cfg.mm_api_key.trim().is_empty() {
+    let char_count = ocr_result.text.chars().count() as u32;
+    if char_count < cfg.multimodal_threshold
+        && cfg.use_multimodal
+        && !cfg.mm_api_key.trim().is_empty()
+    {
         // 返回特殊状态：有OCR结果但太短，前端提示是否用多模态
         return TranslateResult {
             success: true,
-            original: ocr_text,
-            translated: "（识别到的文字较少，可能不准。点击「用大模型重试」用多模态重新识别）".into(),
+            original: ocr_result.text,
+            translated: "（识别到的文字较少，可能不准。点击「用大模型重试」用多模态重新识别）"
+                .into(),
             error: Some("SHORT_OCR".into()),
             error_code: Some("SHORT_OCR".into()),
             model: "ocr".into(),
+            overlay_lines: Vec::new(),
         };
     }
 
     // 5. 正常：DeepSeek 纠错+翻译
-    let r = llm_translate(app, &ocr_text, &target_lang, &source_lang).await;
+    let mut r = llm_translate(app, &ocr_result.text, &target_lang, &source_lang).await;
     if r.success {
+        r.overlay_lines =
+            align_overlay_lines(&ocr_result.lines, &r.original, &r.translated).unwrap_or_default();
         let cache = app.state::<TranslateCache>();
         cache.set(cache_key, r.clone());
     }
     r
 }
 
+fn align_overlay_lines(
+    ocr_lines: &[crate::ocr::OcrLine],
+    corrected_original: &str,
+    translated: &str,
+) -> Option<Vec<OverlayLine>> {
+    if ocr_lines.is_empty() || ocr_lines.len() > 80 {
+        return None;
+    }
+    let original_lines = corrected_original
+        .lines()
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    let translated_lines = translated.lines().map(str::trim).collect::<Vec<_>>();
+    if original_lines.len() != ocr_lines.len()
+        || translated_lines.len() != ocr_lines.len()
+        || translated_lines.iter().any(|line| line.is_empty())
+    {
+        return None;
+    }
+    ocr_lines
+        .iter()
+        .zip(translated_lines)
+        .map(|(source, text)| {
+            let rect = source
+                .rect
+                .clone()
+                .filter(crate::ocr::OcrRect::is_reliable)?;
+            Some(OverlayLine {
+                text: text.to_string(),
+                rect,
+            })
+        })
+        .collect()
+}
+
 /// 把 data URI 解码成原始图片字节
 fn decode_data_uri(data_uri: &str) -> Result<Vec<u8>, String> {
     let b64 = data_uri.split(',').nth(1).unwrap_or("");
-    base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        b64,
-    )
-    .map_err(|e| format!("{e}"))
+    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64)
+        .map_err(|e| format!("{e}"))
 }
 
 /// 语言模型纠错+翻译（主力）
@@ -274,23 +353,68 @@ async fn llm_translate(
 ) -> TranslateResult {
     let cfg = config::load(app);
 
+    llm_translate_with_config(&cfg, ocr_text, target_lang, source_lang).await
+}
+
+/// 使用给定配置执行一次文字翻译。欢迎向导的连接测试与正式翻译共用这条路径，
+/// 避免出现“测试成功，但实际翻译走的是另一套请求格式”。
+async fn llm_translate_with_config(
+    cfg: &config::Config,
+    ocr_text: &str,
+    target_lang: &str,
+    source_lang: &str,
+) -> TranslateResult {
     if cfg.llm_api_key.trim().is_empty() {
-        return TranslateResult::err("NO_KEY", "未配置语言模型 API Key，请在设置中填写".into(), cfg.llm_model);
+        return TranslateResult::err_with_original(
+            "NO_KEY",
+            "尚未配置 AI 翻译服务".into(),
+            cfg.llm_model.clone(),
+            ocr_text.into(),
+        );
     }
     if cfg.llm_model.trim().is_empty() {
-        return TranslateResult::err("NO_MODEL", "未配置语言模型名称".into(), cfg.llm_model);
+        return TranslateResult::err_with_original(
+            "NO_MODEL",
+            "尚未配置模型名称".into(),
+            cfg.llm_model.clone(),
+            ocr_text.into(),
+        );
+    }
+    if cfg.llm_base_url.trim().is_empty() {
+        return TranslateResult::err_with_original(
+            "NO_BASE_URL",
+            "尚未配置接口地址".into(),
+            cfg.llm_model.clone(),
+            ocr_text.into(),
+        );
     }
 
     let prompt = build_llm_prompt(ocr_text, target_lang, source_lang);
-    let url = format!("{}/chat/completions", cfg.llm_base_url.trim_end_matches('/'));
+    let mut result = match config::api_format(&cfg.llm_provider) {
+        "anthropic" => call_anthropic_text(cfg, &prompt).await,
+        _ => call_openai_text(cfg, &prompt).await,
+    };
+    if !result.success && result.original.is_empty() {
+        result.original = ocr_text.into();
+    }
+    result
+}
+
+async fn call_openai_text(cfg: &config::Config, prompt: &str) -> TranslateResult {
+    let url = format!(
+        "{}/chat/completions",
+        cfg.llm_base_url.trim_end_matches('/')
+    );
     log_debug(&format!("llm_translate: url={url} model={}", cfg.llm_model));
 
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": cfg.llm_model,
         "messages": [{"role":"user","content":prompt}],
-        "thinking": {"type":"disabled"},
         "temperature": 0.2
     });
+    if cfg.llm_base_url.contains("deepseek.com") || cfg.llm_model.starts_with("deepseek-") {
+        body["thinking"] = serde_json::json!({"type":"disabled"});
+    }
 
     let client = build_client();
     let start = std::time::Instant::now();
@@ -306,19 +430,73 @@ async fn llm_translate(
             .await;
         match resp {
             Err(e) => {
-                log_debug(&format!("llm_translate: 第{attempt}次出错 {:.1}s {e}", start.elapsed().as_secs_f64()));
+                log_debug(&format!(
+                    "llm_translate: 第{attempt}次出错 {:.1}s {e}",
+                    start.elapsed().as_secs_f64()
+                ));
                 last_err = Some(e);
-                if attempt < 2 { tokio::time::sleep(std::time::Duration::from_secs(1)).await; }
+                if attempt < 2 {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
             }
             Ok(r) => {
-                log_debug(&format!("llm_translate: 收到响应 status={} 耗时{:.1}s", r.status(), start.elapsed().as_secs_f64()));
+                log_debug(&format!(
+                    "llm_translate: 收到响应 status={} 耗时{:.1}s",
+                    r.status(),
+                    start.elapsed().as_secs_f64()
+                ));
                 let res = parse_llm_resp(&cfg.llm_model, r).await;
-                log_debug(&format!("llm_translate: 解析完成 耗时{:.1}s", start.elapsed().as_secs_f64()));
+                log_debug(&format!(
+                    "llm_translate: 解析完成 耗时{:.1}s",
+                    start.elapsed().as_secs_f64()
+                ));
                 return res;
             }
         }
     }
     map_network_err(&cfg.llm_model, last_err.unwrap())
+}
+
+async fn call_anthropic_text(cfg: &config::Config, prompt: &str) -> TranslateResult {
+    let url = format!("{}/messages", cfg.llm_base_url.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "model": cfg.llm_model,
+        "max_tokens": 2048,
+        "messages": [{"role":"user","content":prompt}]
+    });
+    let client = build_client();
+    let mut last_err = None;
+    for attempt in 1..=2 {
+        let response = client
+            .post(&url)
+            .header("x-api-key", &cfg.llm_api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(60))
+            .send()
+            .await;
+        match response {
+            Ok(response) => return parse_anthropic_resp(&cfg.llm_model, response).await,
+            Err(error) => {
+                last_err = Some(error);
+                if attempt < 2 {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+            }
+        }
+    }
+    map_network_err(&cfg.llm_model, last_err.unwrap())
+}
+
+/// 欢迎向导使用的真实连接测试。
+pub async fn test_llm_config(cfg: &config::Config) -> Result<String, String> {
+    let result = llm_translate_with_config(cfg, "Temple", "简体中文", "English").await;
+    if result.success {
+        Ok(result.model)
+    } else {
+        Err(result.error.unwrap_or_else(|| "连接测试失败".into()))
+    }
 }
 
 async fn parse_llm_resp(model: &str, r: reqwest::Response) -> TranslateResult {
@@ -336,7 +514,10 @@ async fn parse_llm_resp(model: &str, r: reqwest::Response) -> TranslateResult {
         .as_str()
         .unwrap_or("")
         .to_string();
-    log_debug(&format!("parse_llm_resp: content={}", preview(&content, 100)));
+    log_debug(&format!(
+        "parse_llm_resp: content={}",
+        preview(&content, 100)
+    ));
     parse_content(model, &content)
 }
 
@@ -361,18 +542,12 @@ fn build_llm_prompt(ocr_text: &str, target_lang: &str, source_lang: &str) -> Str
 }
 
 /// 公开接口：只走多模态（绕过OCR，用户手动重试用）
-pub async fn multimodal_only(
-    app: &AppHandle,
-    params: &TranslateParams,
-) -> TranslateResult {
+pub async fn multimodal_only(app: &AppHandle, params: &TranslateParams) -> TranslateResult {
     multimodal_translate(app, params).await
 }
 
 /// 多模态发图翻译（保底）
-async fn multimodal_translate(
-    app: &AppHandle,
-    params: &TranslateParams,
-) -> TranslateResult {
+async fn multimodal_translate(app: &AppHandle, params: &TranslateParams) -> TranslateResult {
     let cfg = config::load(app);
     let model = cfg.mm_model.clone();
     // 目标语言：空则用母语
@@ -493,7 +668,10 @@ async fn call_openai(cfg: &config::Config, params: &TranslateParams) -> Translat
     let mut last_err = None;
     for attempt in 1..=2 {
         let start = std::time::Instant::now();
-        log_debug(&format!("call_openai: 第 {attempt} 次发送请求 data_uri={}字节", params.data_uri.len()));
+        log_debug(&format!(
+            "call_openai: 第 {attempt} 次发送请求 data_uri={}字节",
+            params.data_uri.len()
+        ));
         let resp = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", cfg.mm_api_key))
@@ -504,7 +682,10 @@ async fn call_openai(cfg: &config::Config, params: &TranslateParams) -> Translat
 
         match resp {
             Err(e) => {
-                log_debug(&format!("call_openai: 第 {attempt} 次出错 {:.1}s {e}", start.elapsed().as_secs_f64()));
+                log_debug(&format!(
+                    "call_openai: 第 {attempt} 次出错 {:.1}s {e}",
+                    start.elapsed().as_secs_f64()
+                ));
                 last_err = Some(e);
                 // 网络层错误才重试，等 1 秒
                 if attempt < 2 {
@@ -512,10 +693,17 @@ async fn call_openai(cfg: &config::Config, params: &TranslateParams) -> Translat
                 }
             }
             Ok(r) => {
-                log_debug(&format!("call_openai: 收到响应 status={} 耗时 {:.1}s", r.status(), start.elapsed().as_secs_f64()));
+                log_debug(&format!(
+                    "call_openai: 收到响应 status={} 耗时 {:.1}s",
+                    r.status(),
+                    start.elapsed().as_secs_f64()
+                ));
                 let parse_start = std::time::Instant::now();
                 let res = parse_openai_resp(&cfg.mm_model, r).await;
-                log_debug(&format!("call_openai: 解析完成 耗时 {:.1}s", parse_start.elapsed().as_secs_f64()));
+                log_debug(&format!(
+                    "call_openai: 解析完成 耗时 {:.1}s",
+                    parse_start.elapsed().as_secs_f64()
+                ));
                 return res;
             }
         }
@@ -529,7 +717,9 @@ async fn parse_openai_resp(model: &str, r: reqwest::Response) -> TranslateResult
     // 非 2xx -> 错误
     if !r.status().is_success() {
         let txt = r.text().await.unwrap_or_default();
-        log_debug(&format!("parse_openai_resp: 非2xx status={status} body={txt}"));
+        log_debug(&format!(
+            "parse_openai_resp: 非2xx status={status} body={txt}"
+        ));
         return map_http_err(model, status, &txt);
     }
     let v: serde_json::Value = match r.json().await {
@@ -543,7 +733,10 @@ async fn parse_openai_resp(model: &str, r: reqwest::Response) -> TranslateResult
         .as_str()
         .unwrap_or("")
         .to_string();
-    log_debug(&format!("parse_openai_resp: content={}", preview(&content, 200)));
+    log_debug(&format!(
+        "parse_openai_resp: content={}",
+        preview(&content, 200)
+    ));
     parse_content(model, &content)
 }
 
@@ -717,7 +910,8 @@ fn build_client() -> reqwest::Client {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_llm_prompt, compress_for_multimodal, parse_content, preview, prompt,
+        align_overlay_lines, build_llm_prompt, compress_for_multimodal, llm_translate_with_config,
+        parse_content, preview, prompt,
     };
     use base64::Engine;
 
@@ -748,6 +942,49 @@ mod tests {
         let image_prompt = prompt("English", "日本語");
         assert!(image_prompt.contains("原文语言是日本語"));
         assert!(image_prompt.contains("产品类型、功能名称、标题和普通词必须翻译"));
+    }
+
+    #[test]
+    fn overlay_alignment_requires_exact_lines_and_reliable_rectangles() {
+        let lines = vec![
+            crate::ocr::OcrLine {
+                text: "Hello".into(),
+                rect: Some(crate::ocr::OcrRect {
+                    left: 0.1,
+                    top: 0.2,
+                    width: 0.3,
+                    height: 0.1,
+                }),
+            },
+            crate::ocr::OcrLine {
+                text: "World".into(),
+                rect: Some(crate::ocr::OcrRect {
+                    left: 0.1,
+                    top: 0.4,
+                    width: 0.4,
+                    height: 0.1,
+                }),
+            },
+        ];
+        let aligned = align_overlay_lines(&lines, "Hello\nWorld", "你好\n世界").unwrap();
+        assert_eq!(aligned.len(), 2);
+        assert_eq!(aligned[1].text, "世界");
+        assert!(align_overlay_lines(&lines, "Hello\nWorld", "你好，世界").is_none());
+
+        let mut missing_rect = lines;
+        missing_rect[0].rect = None;
+        assert!(align_overlay_lines(&missing_rect, "Hello\nWorld", "你好\n世界").is_none());
+    }
+
+    #[tokio::test]
+    async fn missing_key_keeps_recognized_text_for_ocr_only_mode() {
+        let config = crate::config::Config::default();
+        let result =
+            llm_translate_with_config(&config, "recognized text", "简体中文", "English").await;
+
+        assert!(!result.success);
+        assert_eq!(result.error_code.as_deref(), Some("NO_KEY"));
+        assert_eq!(result.original, "recognized text");
     }
 
     #[test]

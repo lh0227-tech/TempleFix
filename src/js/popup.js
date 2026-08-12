@@ -3,6 +3,7 @@
   "use strict";
 
   const $ = (id) => document.getElementById(id);
+  const tr = (key, values) => TFI18n.t(key, values);
   let curResult = null;
   let targetLang = "";
 
@@ -36,11 +37,17 @@
   // 2. 再异步加载数据
   async function loadData() {
     try {
-      const data = await TF.invoke("get_last_result");
+      const [data, config] = await Promise.all([
+        TF.invoke("get_last_result"),
+        TF.invoke("get_config"),
+      ]);
+      TFI18n.setLanguage(TFI18n.detect(config));
+      TFI18n.apply(document);
+      document.title = tr("popup_title");
       targetLang = (data && data.target_lang) || "简体中文";
       render(data && data.result);
     } catch (e) {
-      showLoading("加载失败：" + e);
+      showLoading(tr("translate_failed") + ": " + e);
     }
   }
 
@@ -51,17 +58,21 @@
 
   function render(result) {
     if (!result) {
-      showLoading("正在翻译…");
+      showLoading(tr("translating"));
       return;
     }
     curResult = result;
     const content = $("content");
 
     if (!result.success) {
+      if (["NO_KEY", "NO_MODEL", "NO_BASE_URL"].includes(result.error_code)) {
+        renderMissingService(result);
+        return;
+      }
       content.innerHTML = `
         <div class="error-box">
-          <div class="msg">${esc(result.error || "翻译失败")}</div>
-          <button class="btn btn-primary retry" id="retryBtn">重试</button>
+          <div class="msg">${esc(localizedError(result))}</div>
+          <button class="btn btn-primary retry" id="retryBtn">${esc(tr("retry"))}</button>
         </div>`;
       const rb = $("retryBtn");
       if (rb) rb.addEventListener("click", retry);
@@ -74,15 +85,15 @@
 
     content.innerHTML = `
       <div class="block">
-        <div class="label">原文 ${isShortOcr ? "（识别较少）" : ""}</div>
+        <div class="label">${esc(tr("original"))} ${isShortOcr ? esc(tr("recognition_short")) : ""}</div>
         <div class="text ${result.original ? "" : "empty"}">${
-      esc(result.original) || "（无）"
+      esc(result.original) || esc(tr("no_text"))
     }</div>
       </div>
       <div class="block">
-        <div class="label">译文 · ${esc(targetLang)}</div>
+        <div class="label">${esc(tr("translation_to", { language: targetLang }))}</div>
         <div class="text ${result.translated ? "" : "empty"}">${
-      esc(result.translated) || "（无）"
+      esc(result.translated) || esc(tr("no_text"))
     }</div>
       </div>`;
 
@@ -90,14 +101,63 @@
     if (isShortOcr) {
       const btn = document.createElement("button");
       btn.className = "btn btn-primary mm-retry-btn";
-      btn.textContent = "用大模型重新识别";
+      btn.textContent = tr("mm_retry");
       btn.addEventListener("click", mmRetry);
       content.appendChild(btn);
     }
 
     const t = $("title");
     if (t) t.textContent = result.model || "太阳穴";
+    $("copy2").textContent = tr("copy_translation");
     fitWindow(result);
+  }
+
+  function renderMissingService(result) {
+    curResult = result;
+    const original = result.original || "";
+    $("content").innerHTML = `
+      <div class="setup-required">
+        <div class="setup-title">${esc(tr("missing_title"))}</div>
+        <div class="setup-copy">${esc(tr("missing_copy"))}</div>
+        ${original ? `<div class="ocr-preview"><div class="label">${esc(tr("recognized_text"))}</div><div class="text">${esc(original)}</div></div>` : ""}
+        <div class="setup-actions">
+          <button class="btn btn-primary" id="setupNow">${esc(tr("setup_now"))}</button>
+          <button class="btn btn-ghost" id="ocrOnly" ${original ? "" : "disabled"}>${esc(tr("extract_only"))}</button>
+          <button class="btn btn-ghost" id="setupCancel">${esc(tr("cancel"))}</button>
+        </div>
+      </div>`;
+    $("setupNow").addEventListener("click", openSetup);
+    $("ocrOnly").addEventListener("click", () => renderOcrOnly(original));
+    $("setupCancel").addEventListener("click", close);
+    fitWindow(result);
+  }
+
+  function renderOcrOnly(original) {
+    curResult = {
+      success: true,
+      original,
+      translated: "",
+      model: "OCR",
+    };
+    $("content").innerHTML = `
+      <div class="block">
+        <div class="label">${esc(tr("extracted_text"))}</div>
+        <div class="text">${esc(original)}</div>
+      </div>`;
+    const title = $("title");
+    if (title) title.textContent = tr("extract_title");
+    const copy = $("copy2");
+    if (copy) copy.textContent = tr("copy_text");
+    fitWindow(curResult);
+  }
+
+  async function openSetup() {
+    try {
+      await TF.invoke("open_onboarding", { step: "service" });
+      await TF.invoke("hide_popup");
+    } catch (e) {
+      showLoading(tr("open_settings_failed", { error: e }));
+    }
   }
 
   function measureLongestLine(result) {
@@ -136,12 +196,12 @@
 
   // 用多模态重新翻译（用户点"用大模型重新识别"）
   async function mmRetry() {
-    showLoading("用大模型识别中…");
+    showLoading(tr("mm_working"));
     try {
       const r = await TF.invoke("multimodal_retry");
       render(r);
     } catch (e) {
-      showLoading("识别失败：" + e);
+      showLoading(tr("recognition_failed", { error: e }));
     }
   }
 
@@ -154,9 +214,10 @@
   }
 
   function copyText() {
-    if (!curResult || !curResult.translated) return;
-    navigator.clipboard.writeText(curResult.translated).then(() => {
-      flashTitle("已复制 ✓");
+    const text = curResult && (curResult.translated || curResult.original);
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      flashTitle(tr("copied"));
     });
   }
 
@@ -164,7 +225,7 @@
     try {
       await TF.invoke("trigger_screenshot_cmd");
     } catch (e) {
-      showLoading("重新截图失败：" + e);
+      showLoading(tr("recapture_failed", { error: e }));
     }
   }
 
@@ -187,6 +248,24 @@
     const d = document.createElement("div");
     d.textContent = s || "";
     return d.innerHTML;
+  }
+
+  function localizedError(result) {
+    const keys = {
+      AUTH: "error_auth",
+      QUOTA: "error_quota",
+      RATE: "error_rate",
+      TIMEOUT: "error_timeout",
+      NET: "error_network",
+      HTTP: "error_http",
+      OCR_EMPTY: "error_ocr_empty",
+      OCR_UNAVAILABLE: "error_ocr_unavailable",
+      PARSE: "error_parse",
+      NO_MM_KEY: "error_multimodal_missing",
+      NO_MM_MODEL: "error_multimodal_missing",
+    };
+    const key = keys[result && result.error_code];
+    return key ? tr(key) : (result && result.error) || tr("translate_failed");
   }
 
   // 启动：先绑定，再加载

@@ -127,6 +127,8 @@ struct WorkerResponse {
 struct WorkerLine {
     text: String,
     score: f64,
+    #[serde(default, rename = "box")]
+    box_points: Option<Vec<[f64; 2]>>,
 }
 
 struct Worker {
@@ -361,9 +363,9 @@ fn emit_progress(
 
 fn is_safe_relative(path: &Path) -> bool {
     !path.as_os_str().is_empty()
-        && path.components().all(|part| {
-            matches!(part, Component::Normal(_) | Component::CurDir)
-        })
+        && path
+            .components()
+            .all(|part| matches!(part, Component::Normal(_) | Component::CurDir))
 }
 
 fn load_manifest(directory: &Path) -> Result<ComponentManifest, String> {
@@ -455,6 +457,7 @@ pub fn supports_language(app: &AppHandle, source_lang: &str) -> bool {
         "繁體中文" => "Chinese (Traditional)",
         "日本語" => "Japanese",
         "Français" => "French",
+        "Deutsch" => "German",
         "Português" => "Portuguese",
         "Español" => "Spanish",
         other => other,
@@ -473,6 +476,7 @@ fn worker_executable(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(directory.join(manifest.worker))
 }
 
+#[cfg(test)]
 fn filter_lines(lines: &[WorkerLine]) -> (String, usize) {
     let mut accepted = Vec::new();
     let mut rejected = 0;
@@ -490,11 +494,62 @@ fn filter_lines(lines: &[WorkerLine]) -> (String, usize) {
     (accepted.join("\n"), rejected)
 }
 
-pub fn recognize(
-    app: &AppHandle,
-    image_bytes: &[u8],
-) -> Result<String, String> {
+fn filter_result(
+    lines: &[WorkerLine],
+    image_width: f64,
+    image_height: f64,
+) -> (crate::ocr::OcrResult, usize) {
+    let mut accepted = Vec::new();
+    let mut rejected = 0;
+    for line in lines {
+        let text = line.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        if line.score < MIN_TEXT_SCORE {
+            rejected += 1;
+            continue;
+        }
+        let rect = line.box_points.as_ref().and_then(|points| {
+            let left = points
+                .iter()
+                .map(|point| point[0])
+                .fold(f64::INFINITY, f64::min);
+            let top = points
+                .iter()
+                .map(|point| point[1])
+                .fold(f64::INFINITY, f64::min);
+            let right = points
+                .iter()
+                .map(|point| point[0])
+                .fold(f64::NEG_INFINITY, f64::max);
+            let bottom = points
+                .iter()
+                .map(|point| point[1])
+                .fold(f64::NEG_INFINITY, f64::max);
+            crate::ocr::OcrRect::from_pixels(
+                left,
+                top,
+                right - left,
+                bottom - top,
+                image_width,
+                image_height,
+            )
+        });
+        accepted.push(crate::ocr::OcrLine {
+            text: text.to_string(),
+            rect,
+        });
+    }
+    (crate::ocr::OcrResult::from_lines(accepted), rejected)
+}
+
+pub fn recognize(app: &AppHandle, image_bytes: &[u8]) -> Result<crate::ocr::OcrResult, String> {
     let executable = worker_executable(app)?;
+    let image = image::load_from_memory(image_bytes)
+        .map_err(|e| format!("读取增强 OCR 图片尺寸失败：{e}"))?;
+    let image_width = image.width() as f64;
+    let image_height = image.height() as f64;
     let state = app.state::<RapidOcrState>();
     let mut slot = state.worker.lock().unwrap();
 
@@ -505,17 +560,17 @@ pub fn recognize(
         let result = slot.as_mut().unwrap().request(image_bytes);
         match result {
             Ok(response) => {
-                let (text, rejected) = filter_lines(&response.lines);
+                let (result, rejected) = filter_result(&response.lines, image_width, image_height);
                 crate::log_debug(&format!(
                     "RapidOCR: 行数={} 过滤={} 耗时={}ms",
                     response.lines.len(),
                     rejected,
                     response.elapsed_ms
                 ));
-                if text.trim().is_empty() {
+                if result.text.trim().is_empty() {
                     return Err("增强 OCR 没有识别到可靠文字".into());
                 }
-                return Ok(text);
+                return Ok(result);
             }
             Err(error) if attempt == 0 => {
                 crate::log_debug(&format!("RapidOCR 首次调用失败，重启组件：{error}"));
@@ -625,7 +680,10 @@ fn build_download_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("创建组件下载连接失败：{e}"))
 }
 
-async fn download_package(app: &AppHandle, config: &ReleaseConfig) -> Result<(PathBuf, String), String> {
+async fn download_package(
+    app: &AppHandle,
+    config: &ReleaseConfig,
+) -> Result<(PathBuf, String), String> {
     let sources: Vec<_> = configured_sources(config)
         .into_iter()
         .filter(|source| source_url_is_allowed(&source.url))
@@ -641,7 +699,11 @@ async fn download_package(app: &AppHandle, config: &ReleaseConfig) -> Result<(Pa
     tokio::fs::create_dir_all(&cache)
         .await
         .map_err(|e| format!("创建下载缓存目录失败：{e}"))?;
-    let target = cache.join(format!("rapidocr-{}-{}.zip", config.version, std::process::id()));
+    let target = cache.join(format!(
+        "rapidocr-{}-{}.zip",
+        config.version,
+        std::process::id()
+    ));
     let client = build_download_client()?;
 
     let mut errors = Vec::new();
@@ -724,8 +786,7 @@ where
     F: FnMut(u64, u64),
 {
     let package = File::open(package_path).map_err(|e| format!("打开组件包失败：{e}"))?;
-    let mut archive =
-        zip::ZipArchive::new(package).map_err(|e| format!("组件包损坏：{e}"))?;
+    let mut archive = zip::ZipArchive::new(package).map_err(|e| format!("组件包损坏：{e}"))?;
     let mut total = 0u64;
     for index in 0..archive.len() {
         let entry = archive
@@ -758,8 +819,7 @@ where
         if let Some(parent) = output.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("创建组件子目录失败：{e}"))?;
         }
-        let mut output_file =
-            File::create(&output).map_err(|e| format!("写入组件失败：{e}"))?;
+        let mut output_file = File::create(&output).map_err(|e| format!("写入组件失败：{e}"))?;
         loop {
             let count = entry
                 .read(&mut buffer)
@@ -885,15 +945,7 @@ pub async fn download_and_install(app: &AppHandle) -> Result<RapidOcrStatus, Str
     match result {
         Ok(()) => Ok(status(app)),
         Err(error) => {
-            emit_progress(
-                app,
-                "failed",
-                0,
-                0,
-                0,
-                format!("安装失败：{error}"),
-                "",
-            );
+            emit_progress(app, "failed", 0, 0, 0, format!("安装失败：{error}"), "");
             Err(error)
         }
     }
@@ -1014,9 +1066,9 @@ pub fn uninstall(app: &AppHandle) -> Result<RapidOcrStatus, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_download_client, download_one, extract_package, filter_lines, is_safe_relative, load_manifest,
-        load_release_config, source_url_is_allowed, verify_package, DownloadSource, Worker,
-        WorkerLine,
+        build_download_client, download_one, extract_package, filter_lines, filter_result,
+        is_safe_relative, load_manifest, load_release_config, source_url_is_allowed,
+        verify_package, DownloadSource, Worker, WorkerLine,
     };
     use std::path::Path;
 
@@ -1034,19 +1086,43 @@ mod tests {
             WorkerLine {
                 text: "SPIDER-MAN".into(),
                 score: 0.999,
+                box_points: None,
             },
             WorkerLine {
                 text: "MLSIE".into(),
                 score: 0.542,
+                box_points: None,
             },
             WorkerLine {
                 text: "No Way Hame".into(),
                 score: 0.941,
+                box_points: None,
             },
         ];
         let (text, rejected) = filter_lines(&lines);
         assert_eq!(text, "SPIDER-MAN\nNo Way Hame");
         assert_eq!(rejected, 1);
+    }
+
+    #[test]
+    fn worker_boxes_are_normalized_for_overlay_layout() {
+        let lines = vec![WorkerLine {
+            text: "Hello".into(),
+            score: 0.99,
+            box_points: Some(vec![
+                [20.0, 10.0],
+                [120.0, 10.0],
+                [120.0, 40.0],
+                [20.0, 40.0],
+            ]),
+        }];
+        let (result, rejected) = filter_result(&lines, 200.0, 100.0);
+        assert_eq!(rejected, 0);
+        let rect = result.lines[0].rect.as_ref().unwrap();
+        assert_eq!(rect.left, 0.1);
+        assert_eq!(rect.top, 0.1);
+        assert!((rect.width - 0.5).abs() < 1e-9);
+        assert!((rect.height - 0.3).abs() < 1e-9);
     }
 
     #[test]

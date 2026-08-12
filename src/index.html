@@ -5,6 +5,11 @@
   <title>TempleFix</title>
 </head>
 <body>
-  <p>太阳穴 TempleFix</p>
+  <p data-i18n="app_name">太阳穴 TempleFix</p>
+  <script src="js/i18n.js"></script>
+  <script>
+    TFI18n.setLanguage(TFI18n.detect({}));
+    TFI18n.apply(document);
+  </script>
 </body>
 </html>

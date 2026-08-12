@@ -145,6 +145,38 @@ body {
   text-align: center;
   padding: 20px;
 }
+
+.setup-required {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.setup-title {
+  font-size: 17px;
+  font-weight: 750;
+  color: var(--text);
+}
+
+.setup-copy {
+  color: var(--text-dim);
+  line-height: 1.55;
+}
+
+.ocr-preview {
+  max-height: 260px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
 .error-box .msg {
   color: var(--danger);
   font-size: 14px;

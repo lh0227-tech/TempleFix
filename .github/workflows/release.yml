@@ -1,0 +1,51 @@
+name: Prepare signed Windows release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build files
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Validate signed updater configuration
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TEMPLEFIX_UPDATER_PUBKEY: ${{ secrets.TEMPLEFIX_UPDATER_PUBKEY }}
+          TEMPLEFIX_GITEE_UPDATE_ENDPOINT: ${{ vars.TEMPLEFIX_GITEE_UPDATE_ENDPOINT }}
+        run: ./scripts/validate_updater_release.ps1
+
+      - name: Run source checks
+        shell: pwsh
+        run: ./scripts/check.ps1
+
+      - name: Build signed draft release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TEMPLEFIX_UPDATER_PUBKEY: ${{ secrets.TEMPLEFIX_UPDATER_PUBKEY }}
+          TEMPLEFIX_GITEE_UPDATE_ENDPOINT: ${{ vars.TEMPLEFIX_GITEE_UPDATE_ENDPOINT }}
+        with:
+          projectPath: src-tauri
+          tagName: templefix-v__VERSION__
+          releaseName: "TempleFix v__VERSION__"
+          releaseBody: "Windows installer and signed automatic-update files."
+          releaseDraft: true
+          prerelease: false
+          uploadUpdaterJson: true
+          args: --config tauri.updater.conf.json

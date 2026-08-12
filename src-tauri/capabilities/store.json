@@ -1,7 +1,0 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "store",
-  "description": "配置存储权限",
-  "windows": ["main", "settings"],
-  "permissions": ["store:default"]
-}

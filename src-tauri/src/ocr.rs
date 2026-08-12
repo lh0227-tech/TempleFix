@@ -3,6 +3,86 @@
 //! 使用 Windows.Media.Ocr 做离线文字识别。小尺寸选区会先无损放大；
 //! 自动模式会尝试本机已安装的 OCR 引擎并选择最完整的结果。
 
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct OcrRect {
+    pub left: f64,
+    pub top: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl OcrRect {
+    pub(crate) fn from_pixels(
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        image_width: f64,
+        image_height: f64,
+    ) -> Option<Self> {
+        if !x.is_finite()
+            || !y.is_finite()
+            || !width.is_finite()
+            || !height.is_finite()
+            || image_width <= 0.0
+            || image_height <= 0.0
+            || width <= 0.0
+            || height <= 0.0
+        {
+            return None;
+        }
+        let left = (x / image_width).clamp(0.0, 1.0);
+        let top = (y / image_height).clamp(0.0, 1.0);
+        let right = ((x + width) / image_width).clamp(left, 1.0);
+        let bottom = ((y + height) / image_height).clamp(top, 1.0);
+        let normalized = Self {
+            left,
+            top,
+            width: right - left,
+            height: bottom - top,
+        };
+        (normalized.width > 0.0 && normalized.height > 0.0).then_some(normalized)
+    }
+
+    pub fn is_reliable(&self) -> bool {
+        self.left.is_finite()
+            && self.top.is_finite()
+            && self.width.is_finite()
+            && self.height.is_finite()
+            && self.left >= 0.0
+            && self.top >= 0.0
+            && self.width >= 0.002
+            && self.height >= 0.002
+            && self.left + self.width <= 1.001
+            && self.top + self.height <= 1.001
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct OcrLine {
+    pub text: String,
+    pub rect: Option<OcrRect>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct OcrResult {
+    pub text: String,
+    pub lines: Vec<OcrLine>,
+}
+
+impl OcrResult {
+    pub(crate) fn from_lines(lines: Vec<OcrLine>) -> Self {
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        Self { text, lines }
+    }
+}
+
 /// 统一 OCR 入口。安装并启用 RapidOCR 后优先走增强离线识别；
 /// 组件不可用或当前语言不受支持时再使用 Windows OCR。
 pub fn recognize(
@@ -10,7 +90,7 @@ pub fn recognize(
     image_bytes: &[u8],
     source_lang: &str,
     use_rapidocr: bool,
-) -> Result<String, String> {
+) -> Result<OcrResult, String> {
     let mut rapid_error = None;
     if use_rapidocr && crate::rapidocr::supports_language(app, source_lang) {
         match crate::rapidocr::recognize(app, image_bytes) {
@@ -72,11 +152,7 @@ fn prepare_image(image_bytes: &[u8], max_dimension: u32) -> Result<Vec<u8>, Stri
 
     let new_width = (width as f32 * scale).round() as u32;
     let new_height = (height as f32 * scale).round() as u32;
-    let resized = image.resize_exact(
-        new_width,
-        new_height,
-        image::imageops::FilterType::Lanczos3,
-    );
+    let resized = image.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3);
     let mut output = std::io::Cursor::new(Vec::new());
     resized
         .write_to(&mut output, ImageFormat::Png)
@@ -88,16 +164,21 @@ fn prepare_image(image_bytes: &[u8], max_dimension: u32) -> Result<Vec<u8>, Stri
 }
 
 #[cfg(windows)]
-pub fn recognize_windows(image_bytes: &[u8], source_lang: &str) -> Result<String, String> {
+pub fn recognize_windows(image_bytes: &[u8], source_lang: &str) -> Result<OcrResult, String> {
     use windows::Graphics::Imaging::BitmapDecoder;
     use windows::Media::Ocr::OcrEngine;
     use windows::Storage::Streams::{DataWriter, InMemoryRandomAccessStream};
 
     let max_dimension = OcrEngine::MaxImageDimension().unwrap_or(2600);
     let prepared = prepare_image(image_bytes, max_dimension)?;
+    let prepared_image =
+        image::load_from_memory(&prepared).map_err(|e| format!("读取预处理图片尺寸失败：{e}"))?;
+    let prepared_width = prepared_image.width() as f64;
+    let prepared_height = prepared_image.height() as f64;
 
     let stream = InMemoryRandomAccessStream::new().map_err(|e| format!("创建流失败：{e}"))?;
-    let writer = DataWriter::CreateDataWriter(&stream).map_err(|e| format!("创建 writer 失败：{e}"))?;
+    let writer =
+        DataWriter::CreateDataWriter(&stream).map_err(|e| format!("创建 writer 失败：{e}"))?;
     writer
         .WriteBytes(&prepared)
         .map_err(|e| format!("写入图片失败：{e}"))?;
@@ -119,16 +200,19 @@ pub fn recognize_windows(image_bytes: &[u8], source_lang: &str) -> Result<String
         .map_err(|e| format!("读取图片失败：{e}"))?;
 
     let engines = make_engines(source_lang)?;
-    let mut best_text = String::new();
+    let mut best_result = OcrResult::default();
     let mut best_score = 0usize;
 
     for (engine, tag) in engines {
-        let text = recognize_with_engine(&engine, &bitmap)?;
-        let score = text_score(&text);
-        log_debug(&format!("引擎={tag} 字符={} 评分={score}", text.chars().count()));
+        let result = recognize_with_engine(&engine, &bitmap, prepared_width, prepared_height)?;
+        let score = text_score(&result.text);
+        log_debug(&format!(
+            "引擎={tag} 字符={} 评分={score}",
+            result.text.chars().count()
+        ));
         if score > best_score {
             best_score = score;
-            best_text = text;
+            best_result = result;
         }
         // 手动指定语言时只有一个引擎，不做无意义的额外尝试。
         if !source_lang.trim().is_empty() {
@@ -136,29 +220,72 @@ pub fn recognize_windows(image_bytes: &[u8], source_lang: &str) -> Result<String
         }
     }
 
-    Ok(best_text)
+    Ok(best_result)
 }
 
 #[cfg(windows)]
 fn recognize_with_engine(
     engine: &windows::Media::Ocr::OcrEngine,
     bitmap: &windows::Graphics::Imaging::SoftwareBitmap,
-) -> Result<String, String> {
+    image_width: f64,
+    image_height: f64,
+) -> Result<OcrResult, String> {
     let result = engine
         .RecognizeAsync(bitmap)
         .map_err(|e| format!("识别失败：{e}"))?
         .get()
         .map_err(|e| format!("识别失败：{e}"))?;
-    let lines = result.Lines().map_err(|e| format!("读取识别结果失败：{e}"))?;
-    let mut text = String::new();
+    // Microsoft documents rotated-image coordinates separately. Until a rotation
+    // transform is available, keep the text but deliberately disable overlay boxes.
+    let has_rotation = result
+        .TextAngle()
+        .ok()
+        .and_then(|angle| angle.Value().ok())
+        .is_some_and(|angle| angle.abs() > 0.5);
+    let lines = result
+        .Lines()
+        .map_err(|e| format!("读取识别结果失败：{e}"))?;
+    let mut recognized_lines = Vec::new();
     for line in &lines {
-        if !text.is_empty() {
-            text.push('\n');
-        }
         let line_text = line.Text().map_err(|e| format!("读取识别文字失败：{e}"))?;
-        text.push_str(&line_text.to_string());
+        let line_text = line_text.to_string();
+        if line_text.trim().is_empty() {
+            continue;
+        }
+        let words = line
+            .Words()
+            .map_err(|e| format!("读取识别文字位置失败：{e}"))?;
+        let mut left = f64::INFINITY;
+        let mut top = f64::INFINITY;
+        let mut right = f64::NEG_INFINITY;
+        let mut bottom = f64::NEG_INFINITY;
+        for word in &words {
+            let rect = word
+                .BoundingRect()
+                .map_err(|e| format!("读取文字边界失败：{e}"))?;
+            left = left.min(rect.X as f64);
+            top = top.min(rect.Y as f64);
+            right = right.max((rect.X + rect.Width) as f64);
+            bottom = bottom.max((rect.Y + rect.Height) as f64);
+        }
+        let rect = (!has_rotation)
+            .then(|| {
+                OcrRect::from_pixels(
+                    left,
+                    top,
+                    right - left,
+                    bottom - top,
+                    image_width,
+                    image_height,
+                )
+            })
+            .flatten();
+        recognized_lines.push(OcrLine {
+            text: line_text,
+            rect,
+        });
     }
-    Ok(text)
+    Ok(OcrResult::from_lines(recognized_lines))
 }
 
 /// 手动指定时严格使用指定引擎；自动模式尝试用户首选引擎和全部已安装引擎。
@@ -244,6 +371,7 @@ fn lang_to_tag(lang: &str) -> &'static str {
         "日本語" => "ja-JP",
         "한국어" => "ko-KR",
         "Français" => "fr-FR",
+        "Deutsch" => "de-DE",
         "Português" => "pt-BR",
         "Español" => "es-ES",
         _ => "",
@@ -260,25 +388,41 @@ fn text_score(text: &str) -> usize {
 }
 
 #[cfg(not(windows))]
-pub fn recognize_windows(_image_bytes: &[u8], _source_lang: &str) -> Result<String, String> {
+pub fn recognize_windows(_image_bytes: &[u8], _source_lang: &str) -> Result<OcrResult, String> {
     Err("OCR 仅支持 Windows 平台".to_string())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{lang_to_tag, text_score};
+    use super::{lang_to_tag, text_score, OcrRect};
 
     #[test]
     fn language_names_map_to_windows_tags() {
         assert_eq!(lang_to_tag("简体中文"), "zh-Hans-CN");
         assert_eq!(lang_to_tag("日本語"), "ja-JP");
         assert_eq!(lang_to_tag("English"), "en-US");
+        assert_eq!(lang_to_tag("Deutsch"), "de-DE");
     }
 
     #[test]
     fn useful_ocr_text_scores_above_empty_or_spaced_noise() {
         assert!(text_score("播放列表") > text_score(""));
         assert!(text_score("Hello world") > text_score("  \n  "));
+    }
+
+    #[test]
+    fn pixel_rectangles_are_normalized_and_clamped() {
+        let rect = OcrRect::from_pixels(50.0, 20.0, 100.0, 40.0, 200.0, 100.0).unwrap();
+        assert_eq!(rect.left, 0.25);
+        assert_eq!(rect.top, 0.2);
+        assert!((rect.width - 0.5).abs() < 1e-9);
+        assert!((rect.height - 0.4).abs() < 1e-9);
+        assert!(rect.is_reliable());
+
+        let clamped = OcrRect::from_pixels(-10.0, 90.0, 50.0, 30.0, 200.0, 100.0).unwrap();
+        assert_eq!(clamped.left, 0.0);
+        assert_eq!(clamped.top, 0.9);
+        assert!((clamped.height - 0.1).abs() < 1e-9);
     }
 
     /// 本机 OCR 探针。平时没有环境变量时直接跳过；收尾测试时传入图片路径执行。
@@ -291,7 +435,7 @@ mod tests {
         let source_lang = std::env::var("TEMPLEFIX_OCR_TEST_LANG").unwrap_or_default();
         let bytes = std::fs::read(path).expect("读取 OCR 探针图片失败");
         let text = super::recognize_windows(&bytes, &source_lang).expect("OCR 探针执行失败");
-        assert!(!text.trim().is_empty(), "OCR 探针没有识别出任何文字");
-        println!("OCR_PROBE_CHARS={}", text.chars().count());
+        assert!(!text.text.trim().is_empty(), "OCR 探针没有识别出任何文字");
+        println!("OCR_PROBE_CHARS={}", text.text.chars().count());
     }
 }

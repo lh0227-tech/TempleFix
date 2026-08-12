@@ -2,6 +2,8 @@
 (function () {
   "use strict";
 
+  const tr = (key, values) => TFI18n.t(key, values);
+
   // ===== 状态 =====
   let shotW = 0,
     shotH = 0; // 截图物理尺寸（后端返回）
@@ -40,7 +42,7 @@
   // 起始提示
   const hint = document.createElement("div");
   hint.className = "start-hint glass";
-  hint.textContent = "按住鼠标拖拽框选翻译区域 · ESC 取消";
+  hint.textContent = "";
 
   function mount() {
     document.body.append(mask, crossV, crossH, selBox, sizeTip, mag, toolbar, hint);
@@ -59,9 +61,15 @@
     crossV.style.display = "none";
     crossH.style.display = "none";
     hint.style.display = "block";
-    hint.textContent = "按住鼠标拖拽框选翻译区域 · ESC 取消";
     try {
-      const size = await TF.invoke("get_shot_size");
+      const [size, config] = await Promise.all([
+        TF.invoke("get_shot_size"),
+        TF.invoke("get_config"),
+      ]);
+      TFI18n.setLanguage(TFI18n.detect(config));
+      TFI18n.apply(document);
+      document.title = tr("overlay_title");
+      hint.textContent = tr("select_hint");
       shotW = size[0];
       shotH = size[1];
       // 加载背景图给放大镜用
@@ -69,7 +77,7 @@
       shotBg = new Image();
       shotBg.src = uri;
     } catch (e) {
-      hint.textContent = "截图失败：" + e;
+      hint.textContent = tr("screenshot_failed", { error: e });
     }
   }
 
@@ -189,11 +197,11 @@
     toolbar.innerHTML = "";
     const btnT = document.createElement("button");
     btnT.className = "btn btn-primary";
-    btnT.textContent = "翻译";
+    btnT.textContent = tr("translate");
     btnT.onclick = doTranslate;
     const btnC = document.createElement("button");
     btnC.className = "btn btn-ghost";
-    btnC.textContent = "取消";
+    btnC.textContent = tr("cancel");
     btnC.onclick = onCancel;
     toolbar.append(btnT, btnC);
     toolbar.style.display = "flex";
@@ -257,7 +265,7 @@
     sizeTip.style.display = "none";
 
     hint.style.display = "block";
-    hint.textContent = "正在翻译…";
+    hint.textContent = tr("translating");
 
     try {
       const dataUri = await TF.invoke("crop_region", {
@@ -274,6 +282,14 @@
       const result = await TF.invoke("translate", {
         dataUri,
         targetLang: cfg.target_lang || "",
+        selection: {
+          css_x: x,
+          css_y: y,
+          css_w: w,
+          css_h: h,
+          win_w: winW,
+          win_h: winH,
+        },
       });
       // 先开浮窗，等浮窗加载一会，再关遮罩
       // （遮罩关闭会销毁本窗口JS上下文，必须最后关；且要给浮窗加载时间）
@@ -282,7 +298,7 @@
       await TF.invoke("close_overlay");
     } catch (e) {
       hint.style.display = "block";
-      hint.textContent = "❌ " + e;
+      hint.textContent = "❌ " + tr("translate_failed") + ": " + e;
     }
   }
 
