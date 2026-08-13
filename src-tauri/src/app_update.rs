@@ -20,6 +20,7 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 
 const GITHUB_UPDATE_ENDPOINT: &str =
     "https://github.com/lh0227-tech/TempleFix/releases/latest/download/latest.json";
+const UPDATER_PUBLIC_KEY: &str = include_str!("../updater-public.key");
 const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const AUTO_CHECK_DELAY_SECS: u64 = 15;
 const SOURCE_TIMEOUT_SECS: u64 = 10;
@@ -108,9 +109,8 @@ fn is_auto_check_due(last_checked_at: u64, now: u64) -> bool {
 }
 
 fn release_pubkey() -> Option<&'static str> {
-    option_env!("TEMPLEFIX_UPDATER_PUBKEY")
-        .map(str::trim)
-        .filter(|value| !value.contains("PLACEHOLDER") && updater_pubkey_is_valid(value))
+    let value = UPDATER_PUBLIC_KEY.trim();
+    (!value.contains("PLACEHOLDER") && updater_pubkey_is_valid(value)).then_some(value)
 }
 
 fn updater_pubkey_is_valid(value: &str) -> bool {

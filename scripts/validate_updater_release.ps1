@@ -12,12 +12,14 @@ function Assert-ConfiguredValue {
 }
 
 Assert-ConfiguredValue "TAURI_SIGNING_PRIVATE_KEY" $env:TAURI_SIGNING_PRIVATE_KEY
-Assert-ConfiguredValue "TEMPLEFIX_UPDATER_PUBKEY" $env:TEMPLEFIX_UPDATER_PUBKEY
-Assert-ConfiguredValue "TEMPLEFIX_GITEE_UPDATE_ENDPOINT" $env:TEMPLEFIX_GITEE_UPDATE_ENDPOINT
+
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$trackedPublicKey = (Get-Content -LiteralPath (Join-Path $projectRoot "src-tauri\updater-public.key") -Raw).Trim()
+Assert-ConfiguredValue "src-tauri/updater-public.key" $trackedPublicKey
 
 try {
     $publicKeyFile = [Text.Encoding]::UTF8.GetString(
-        [Convert]::FromBase64String($env:TEMPLEFIX_UPDATER_PUBKEY.Trim())
+        [Convert]::FromBase64String($trackedPublicKey)
     )
     $publicKeyLines = @($publicKeyFile -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     if ($publicKeyLines.Count -lt 2) {
@@ -31,26 +33,30 @@ try {
     }
 }
 catch {
-    throw "TEMPLEFIX_UPDATER_PUBKEY is not a valid Tauri-encoded Minisign public key."
+    throw "src-tauri/updater-public.key is not a valid Tauri-encoded Minisign public key."
 }
 
-$giteeEndpoint = [Uri]$env:TEMPLEFIX_GITEE_UPDATE_ENDPOINT
-if ($giteeEndpoint.Scheme -ne "https" -or
-    $giteeEndpoint.Host -notin @("gitee.com", "www.gitee.com") -or
-    -not [string]::IsNullOrEmpty($giteeEndpoint.Query) -or
-    -not [string]::IsNullOrEmpty($giteeEndpoint.Fragment) -or
-    -not [string]::IsNullOrEmpty($giteeEndpoint.UserInfo)) {
-    throw "TEMPLEFIX_GITEE_UPDATE_ENDPOINT must be a public HTTPS URL on gitee.com without credentials, query parameters, or fragments."
+if (-not [string]::IsNullOrWhiteSpace($env:TEMPLEFIX_GITEE_UPDATE_ENDPOINT)) {
+    $giteeEndpoint = [Uri]$env:TEMPLEFIX_GITEE_UPDATE_ENDPOINT
+    if ($giteeEndpoint.Scheme -ne "https" -or
+        $giteeEndpoint.Host -notin @("gitee.com", "www.gitee.com") -or
+        -not [string]::IsNullOrEmpty($giteeEndpoint.Query) -or
+        -not [string]::IsNullOrEmpty($giteeEndpoint.Fragment) -or
+        -not [string]::IsNullOrEmpty($giteeEndpoint.UserInfo)) {
+        throw "TEMPLEFIX_GITEE_UPDATE_ENDPOINT must be a public HTTPS URL on gitee.com without credentials, query parameters, or fragments."
+    }
+}
+else {
+    Write-Host "Gitee mirror is not configured; preparing a GitHub-only release."
 }
 
-$projectRoot = Split-Path -Parent $PSScriptRoot
 $cargoToml = Get-Content -LiteralPath (Join-Path $projectRoot "src-tauri\Cargo.toml") -Raw
 $tauriConfig = Get-Content -LiteralPath (Join-Path $projectRoot "src-tauri\tauri.conf.json") -Raw | ConvertFrom-Json
 $updaterConfig = Get-Content -LiteralPath (Join-Path $projectRoot "src-tauri\tauri.updater.conf.json") -Raw | ConvertFrom-Json
 $bundledPublicKey = [string]$updaterConfig.plugins.updater.pubkey
 if ([string]::IsNullOrWhiteSpace($bundledPublicKey) -or
-    $bundledPublicKey.Trim() -ne $env:TEMPLEFIX_UPDATER_PUBKEY.Trim()) {
-    throw "The bundled updater public key and TEMPLEFIX_UPDATER_PUBKEY do not match."
+    $bundledPublicKey.Trim() -ne $trackedPublicKey) {
+    throw "The bundled updater public key and src-tauri/updater-public.key do not match."
 }
 $cargoVersionMatch = [regex]::Match($cargoToml, '(?m)^version\s*=\s*"(?<version>[^"]+)"')
 if (-not $cargoVersionMatch.Success) {

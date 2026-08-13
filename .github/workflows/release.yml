@@ -24,7 +24,6 @@ jobs:
         shell: pwsh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TEMPLEFIX_UPDATER_PUBKEY: ${{ secrets.TEMPLEFIX_UPDATER_PUBKEY }}
           TEMPLEFIX_GITEE_UPDATE_ENDPOINT: ${{ vars.TEMPLEFIX_GITEE_UPDATE_ENDPOINT }}
         run: ./scripts/validate_updater_release.ps1
 
@@ -38,13 +37,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          TEMPLEFIX_UPDATER_PUBKEY: ${{ secrets.TEMPLEFIX_UPDATER_PUBKEY }}
           TEMPLEFIX_GITEE_UPDATE_ENDPOINT: ${{ vars.TEMPLEFIX_GITEE_UPDATE_ENDPOINT }}
         with:
           projectPath: src-tauri
-          tagName: templefix-v__VERSION__
+          tagName: v__VERSION__
           releaseName: "TempleFix v__VERSION__"
-          releaseBody: "Windows installer and signed automatic-update files."
+          releaseBody: |
+            TempleFix v__VERSION__
+
+            - 新增首次启动欢迎向导与未配置 API Key 的友好状态
+            - 新增中英双语语言入口及 7 种界面语言
+            - 新增签名自动更新（当前使用 GitHub 正式源）
+            - 改进 OCR、结果展示与失败回退
           releaseDraft: true
           prerelease: false
           uploadUpdaterJson: true

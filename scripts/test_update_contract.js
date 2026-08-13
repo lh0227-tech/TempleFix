@@ -11,6 +11,7 @@ const assert = (condition, message) => {
 
 const baseConfig = JSON.parse(read("src-tauri/tauri.conf.json"));
 const releaseConfig = JSON.parse(read("src-tauri/tauri.updater.conf.json"));
+const trackedPublicKey = read("src-tauri/updater-public.key").trim();
 assert(baseConfig.bundle.createUpdaterArtifacts !== true,
   "ordinary local builds must not require the release signing key");
 assert(releaseConfig.bundle.createUpdaterArtifacts === true,
@@ -18,12 +19,16 @@ assert(releaseConfig.bundle.createUpdaterArtifacts === true,
 assert(typeof releaseConfig.plugins?.updater?.pubkey === "string" &&
   releaseConfig.plugins.updater.pubkey.length > 100,
 "release builds must bundle the updater verification public key");
-const decodedPublicKey = Buffer.from(releaseConfig.plugins.updater.pubkey, "base64").toString("utf8");
+assert(releaseConfig.plugins.updater.pubkey === trackedPublicKey,
+  "the release config must use the tracked updater verification public key");
+const decodedPublicKey = Buffer.from(trackedPublicKey, "base64").toString("utf8");
 assert(decodedPublicKey.startsWith("untrusted comment: minisign public key") &&
   decodedPublicKey.trim().split(/\r?\n/).length === 2,
 "the bundled updater public key must use Tauri's encoded Minisign format");
 
 const updater = read("src-tauri/src/app_update.rs");
+assert(updater.includes('include_str!("../updater-public.key")'),
+  "the app must compile in the tracked updater verification public key");
 assert(updater.includes("https://github.com/lh0227-tech/TempleFix/releases/latest/download/latest.json"),
   "the canonical GitHub update endpoint is missing");
 assert(updater.includes('"Gitee" => matches!(host.as_str(), "gitee.com" | "www.gitee.com")'),
@@ -55,6 +60,8 @@ assert(!/^\s+push:\s*$/m.test(workflow), "release workflow must not upload on an
 assert(workflow.includes("releaseDraft: true"), "release workflow must create a draft first");
 assert(workflow.includes("tauri-apps/tauri-action@v1"), "release workflow must use the official Tauri action");
 assert(workflow.includes("validate_updater_release.ps1"),
-  "release workflow must fail closed when signing or Gitee configuration is missing");
+  "release workflow must validate signing before building");
+assert(!workflow.includes("TEMPLEFIX_UPDATER_PUBKEY"),
+  "the public verification key must not depend on a GitHub secret");
 
-console.log("Update contract OK: bilingual onboarding, signed dual-source updates, manual draft release.");
+console.log("Update contract OK: bilingual onboarding, signed GitHub updates, optional Gitee mirror, manual draft release.");
