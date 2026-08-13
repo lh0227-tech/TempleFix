@@ -46,6 +46,12 @@ if ($giteeEndpoint.Scheme -ne "https" -or
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $cargoToml = Get-Content -LiteralPath (Join-Path $projectRoot "src-tauri\Cargo.toml") -Raw
 $tauriConfig = Get-Content -LiteralPath (Join-Path $projectRoot "src-tauri\tauri.conf.json") -Raw | ConvertFrom-Json
+$updaterConfig = Get-Content -LiteralPath (Join-Path $projectRoot "src-tauri\tauri.updater.conf.json") -Raw | ConvertFrom-Json
+$bundledPublicKey = [string]$updaterConfig.plugins.updater.pubkey
+if ([string]::IsNullOrWhiteSpace($bundledPublicKey) -or
+    $bundledPublicKey.Trim() -ne $env:TEMPLEFIX_UPDATER_PUBKEY.Trim()) {
+    throw "The bundled updater public key and TEMPLEFIX_UPDATER_PUBKEY do not match."
+}
 $cargoVersionMatch = [regex]::Match($cargoToml, '(?m)^version\s*=\s*"(?<version>[^"]+)"')
 if (-not $cargoVersionMatch.Success) {
     throw "Could not read the Cargo package version."

@@ -15,6 +15,13 @@ assert(baseConfig.bundle.createUpdaterArtifacts !== true,
   "ordinary local builds must not require the release signing key");
 assert(releaseConfig.bundle.createUpdaterArtifacts === true,
   "release builds must create signed updater artifacts");
+assert(typeof releaseConfig.plugins?.updater?.pubkey === "string" &&
+  releaseConfig.plugins.updater.pubkey.length > 100,
+"release builds must bundle the updater verification public key");
+const decodedPublicKey = Buffer.from(releaseConfig.plugins.updater.pubkey, "base64").toString("utf8");
+assert(decodedPublicKey.startsWith("untrusted comment: minisign public key") &&
+  decodedPublicKey.trim().split(/\r?\n/).length === 2,
+"the bundled updater public key must use Tauri's encoded Minisign format");
 
 const updater = read("src-tauri/src/app_update.rs");
 assert(updater.includes("https://github.com/lh0227-tech/TempleFix/releases/latest/download/latest.json"),
