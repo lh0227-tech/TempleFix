@@ -15,7 +15,7 @@ use tauri::{
     WebviewWindowBuilder,
 };
 #[cfg(desktop)]
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut};
 
 /// 写调试日志到文件（定位问题用）
 #[cfg(debug_assertions)]
@@ -38,6 +38,7 @@ fn log_debug(_msg: &str) {}
 struct State {
     last_trigger: Mutex<Option<Instant>>,
     last_esc: Mutex<Option<Instant>>,
+    escape_sync: Mutex<()>,
 }
 
 #[cfg(desktop)]
@@ -60,6 +61,56 @@ fn parse_hotkey(value: &str) -> Result<Shortcut, String> {
     }
     Ok(shortcut)
 }
+
+fn transient_window_requires_escape(overlay: bool, popup: bool, result_overlay: bool) -> bool {
+    overlay || popup || result_overlay
+}
+
+#[cfg(desktop)]
+fn escape_shortcut() -> Shortcut {
+    Shortcut::new(None, Code::Escape)
+}
+
+#[cfg(desktop)]
+fn sync_escape_shortcut(app: &tauri::AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        sync_escape_shortcut_now(&app);
+    });
+}
+
+#[cfg(desktop)]
+fn sync_escape_shortcut_now(app: &tauri::AppHandle) {
+    let state = app.state::<State>();
+    let _sync_guard = state.escape_sync.lock().unwrap();
+    let is_visible = |label| {
+        app.get_webview_window(label)
+            .and_then(|window| window.is_visible().ok())
+            .unwrap_or(false)
+    };
+    let required = transient_window_requires_escape(
+        is_visible("overlay"),
+        is_visible("popup"),
+        is_visible("result_overlay"),
+    );
+    let shortcut = escape_shortcut();
+    let registered = app.global_shortcut().is_registered(shortcut);
+
+    match (required, registered) {
+        (true, false) => match app.global_shortcut().register(escape_shortcut()) {
+            Ok(_) => log_debug("ESC 已按需注册"),
+            Err(error) => log_debug(&format!("ESC 注册失败：{error}")),
+        },
+        (false, true) => match app.global_shortcut().unregister(escape_shortcut()) {
+            Ok(_) => log_debug("ESC 已释放"),
+            Err(error) => log_debug(&format!("ESC 释放失败：{error}")),
+        },
+        _ => {}
+    }
+}
+
+#[cfg(not(desktop))]
+fn sync_escape_shortcut(_app: &tauri::AppHandle) {}
 
 fn should_prevent_exit(code: Option<i32>) -> bool {
     // 没有退出码：通常只是最后一个窗口被关，托盘程序应继续常驻。
@@ -214,6 +265,7 @@ fn close_overlay(app: tauri::AppHandle) {
     } else {
         log_debug("close_overlay: overlay 不存在");
     }
+    sync_escape_shortcut(&app);
 }
 
 /// 取截图物理尺寸（前端用来算 DPI 缩放）
@@ -474,6 +526,7 @@ fn show_plain_popup(app: &tauri::AppHandle) {
     } else {
         log_debug("open_popup: popup 不存在（应在 setup 预创建）");
     }
+    sync_escape_shortcut(app);
 }
 
 fn try_show_original_overlay(app: &tauri::AppHandle) -> Result<bool, String> {
@@ -528,6 +581,7 @@ fn try_show_original_overlay(app: &tauri::AppHandle) -> Result<bool, String> {
     result_window
         .show()
         .map_err(|error| format!("显示原位覆盖失败：{error}"))?;
+    sync_escape_shortcut(app);
     let _ = app.emit_to("result_overlay", "refresh-overlay-result", ());
     Ok(true)
 }
@@ -563,6 +617,7 @@ fn hide_popup(app: tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("result_overlay") {
         let _ = win.hide();
     }
+    sync_escape_shortcut(&app);
 }
 
 /// 按内容调整浮窗大小，并尽量保持浮窗中心位置不跳动。
@@ -621,6 +676,7 @@ fn trigger_screenshot_cmd(app: tauri::AppHandle) {
         let _ = win.hide();
     }
     trigger_screenshot(&app);
+    sync_escape_shortcut(&app);
 }
 
 /// 用多模态重新翻译最近的截图（用户点"用大模型重试"时调）
@@ -698,6 +754,7 @@ fn open_overlay(app: &tauri::AppHandle) {
     } else {
         log_debug("overlay 窗口不存在（应在 setup 预创建）");
     }
+    sync_escape_shortcut(app);
 }
 
 /// 打开设置窗口（已存在则聚焦）
@@ -779,6 +836,7 @@ fn self_test(app: &tauri::AppHandle) {
             let _ = win.show();
             let _ = app.emit_to("popup", "refresh-result", ());
         }
+        sync_escape_shortcut(&app);
         log_debug("self_test: 浮窗已开");
     });
 }
@@ -792,6 +850,7 @@ pub fn run() {
         .manage(State {
             last_trigger: Mutex::new(None),
             last_esc: Mutex::new(None),
+            escape_sync: Mutex::new(()),
         })
         .manage(screenshot::new_cache())
         .manage(translate::TranslateCache::new())
@@ -945,8 +1004,8 @@ pub fn run() {
             // ===== 全局热键（用官方插件，自动处理事件循环线程）=====
             #[cfg(desktop)]
             {
-                use tauri_plugin_global_shortcut::{Code, ShortcutState};
-                let esc = Shortcut::new(None, Code::Escape);
+                use tauri_plugin_global_shortcut::ShortcutState;
+                let esc = escape_shortcut();
                 let configured_hotkey = config::load(app.handle()).hotkey;
                 let capture_hotkey = parse_hotkey(&configured_hotkey).unwrap_or_else(|e| {
                     log_debug(&format!("配置中的快捷键无效，回退 Alt+Z：{e}"));
@@ -972,25 +1031,35 @@ pub fn run() {
                                 }
                                 *last = Some(now);
                                 drop(last);
-                                // 只关当前最上层的窗口：翻译结果优先，没有才关选区。
-                                if let Some(win) = app.get_webview_window("result_overlay") {
-                                    if win.is_visible().unwrap_or(false) {
-                                        let _ = win.hide();
-                                        return;
+                                // 插件派发回调时持有内部快捷键表的锁；必须等回调返回后再注销 ESC。
+                                let app = app.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    // 只关当前最上层的窗口：翻译结果优先，没有才关选区。
+                                    if let Some(win) = app.get_webview_window("result_overlay") {
+                                        if win.is_visible().unwrap_or(false) {
+                                            let _ = win.hide();
+                                            sync_escape_shortcut(&app);
+                                            return;
+                                        }
                                     }
-                                }
-                                if let Some(win) = app.get_webview_window("popup") {
-                                    if win.is_visible().unwrap_or(false) {
-                                        let _ = win.hide();
-                                        return;
+                                    if let Some(win) = app.get_webview_window("popup") {
+                                        if win.is_visible().unwrap_or(false) {
+                                            let _ = win.hide();
+                                            sync_escape_shortcut(&app);
+                                            return;
+                                        }
                                     }
-                                }
-                                if let Some(win) = app.get_webview_window("overlay") {
-                                    let _ = win.hide();
-                                }
+                                    if let Some(win) = app.get_webview_window("overlay") {
+                                        let _ = win.hide();
+                                    }
+                                    sync_escape_shortcut(&app);
+                                });
                             } else {
                                 // 除 ESC 外，本插件只注册当前截图快捷键。
-                                trigger_screenshot(app);
+                                let app = app.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    trigger_screenshot(&app);
+                                });
                             }
                         })
                         .build(),
@@ -999,10 +1068,6 @@ pub fn run() {
                 match app.global_shortcut().register(capture_hotkey) {
                     Ok(_) => log_debug(&format!("{} 注册成功", configured_hotkey)),
                     Err(e) => log_debug(&format!("{} 注册失败：{e}", configured_hotkey)),
-                }
-                match app.global_shortcut().register(esc) {
-                    Ok(_) => log_debug("ESC 注册成功"),
-                    Err(e) => log_debug(&format!("ESC 注册失败：{e}")),
                 }
             }
 
@@ -1040,6 +1105,7 @@ pub fn run() {
 mod tests {
     use super::{
         clamp_popup_size, parse_hotkey, selection_to_physical_bounds, should_prevent_exit,
+        transient_window_requires_escape,
     };
     use tauri::{PhysicalPosition, PhysicalSize};
 
@@ -1055,6 +1121,14 @@ mod tests {
     fn tray_exit_is_allowed_but_window_close_keeps_tray_alive() {
         assert!(should_prevent_exit(None));
         assert!(!should_prevent_exit(Some(0)));
+    }
+
+    #[test]
+    fn escape_is_reserved_only_while_a_transient_window_is_visible() {
+        assert!(!transient_window_requires_escape(false, false, false));
+        assert!(transient_window_requires_escape(true, false, false));
+        assert!(transient_window_requires_escape(false, true, false));
+        assert!(transient_window_requires_escape(false, false, true));
     }
 
     #[test]

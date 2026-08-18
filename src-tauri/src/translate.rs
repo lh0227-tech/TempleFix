@@ -17,6 +17,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
+const DEEPSEEK_JSON_MAX_TOKENS: u32 = 4096;
+
 /// 写调试日志到文件（定位翻译问题用，带时间戳）
 #[cfg(debug_assertions)]
 fn log_debug(msg: &str) {
@@ -400,6 +402,37 @@ async fn llm_translate_with_config(
     result
 }
 
+fn is_official_deepseek_endpoint(base_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base_url.trim()) else {
+        return false;
+    };
+    url.scheme() == "https"
+        && url
+            .host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case("api.deepseek.com"))
+}
+
+fn build_openai_text_body(cfg: &config::Config, prompt: &str) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "model": cfg.llm_model,
+        "messages": [{"role":"user","content":prompt}],
+        "temperature": 0.2
+    });
+
+    if is_official_deepseek_endpoint(&cfg.llm_base_url) {
+        body["response_format"] = serde_json::json!({"type":"json_object"});
+        body["max_tokens"] = serde_json::json!(DEEPSEEK_JSON_MAX_TOKENS);
+    }
+    if cfg.llm_base_url.contains("deepseek.com") || cfg.llm_model.starts_with("deepseek-") {
+        body["thinking"] = serde_json::json!({"type":"disabled"});
+    }
+    body
+}
+
+fn should_retry_deepseek_json(result: &TranslateResult) -> bool {
+    result.error_code.as_deref() == Some("PARSE")
+}
+
 async fn call_openai_text(cfg: &config::Config, prompt: &str) -> TranslateResult {
     let url = format!(
         "{}/chat/completions",
@@ -407,19 +440,17 @@ async fn call_openai_text(cfg: &config::Config, prompt: &str) -> TranslateResult
     );
     log_debug(&format!("llm_translate: url={url} model={}", cfg.llm_model));
 
-    let mut body = serde_json::json!({
-        "model": cfg.llm_model,
-        "messages": [{"role":"user","content":prompt}],
-        "temperature": 0.2
-    });
-    if cfg.llm_base_url.contains("deepseek.com") || cfg.llm_model.starts_with("deepseek-") {
-        body["thinking"] = serde_json::json!({"type":"disabled"});
-    }
-
+    let deepseek_json_mode = is_official_deepseek_endpoint(&cfg.llm_base_url);
     let client = build_client();
     let start = std::time::Instant::now();
     let mut last_err = None;
     for attempt in 1..=2 {
+        let retry_prompt = (deepseek_json_mode && attempt > 1).then(|| {
+            format!(
+                "{prompt}\n再次强调：必须返回非空、合法的 JSON 对象，并完整包含 original 和 translated 两个字符串字段。"
+            )
+        });
+        let body = build_openai_text_body(cfg, retry_prompt.as_deref().unwrap_or(prompt));
         log_debug(&format!("llm_translate: 第{attempt}次发送"));
         let resp = client
             .post(&url)
@@ -450,11 +481,23 @@ async fn call_openai_text(cfg: &config::Config, prompt: &str) -> TranslateResult
                     "llm_translate: 解析完成 耗时{:.1}s",
                     start.elapsed().as_secs_f64()
                 ));
+                if deepseek_json_mode && attempt < 2 && should_retry_deepseek_json(&res) {
+                    log_debug("llm_translate: DeepSeek JSON 为空或格式异常，强化提示后重试");
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    continue;
+                }
                 return res;
             }
         }
     }
-    map_network_err(&cfg.llm_model, last_err.unwrap())
+    match last_err {
+        Some(error) => map_network_err(&cfg.llm_model, error),
+        None => TranslateResult::err(
+            "PARSE",
+            "模型返回格式异常，未能解析原文和译文".into(),
+            cfg.llm_model.clone(),
+        ),
+    }
 }
 
 async fn call_anthropic_text(cfg: &config::Config, prompt: &str) -> TranslateResult {
@@ -518,6 +561,9 @@ async fn parse_llm_resp(model: &str, r: reqwest::Response) -> TranslateResult {
         "parse_llm_resp: content={}",
         preview(&content, 100)
     ));
+    if content.trim().is_empty() {
+        return TranslateResult::err("PARSE", "模型返回了空内容，请重试".into(), model.into());
+    }
     parse_content(model, &content)
 }
 
@@ -826,7 +872,7 @@ fn parse_content(model: &str, content: &str) -> TranslateResult {
     if let Some((orig, trans)) = parsed {
         return TranslateResult::ok(orig, trans, model.into());
     }
-    // 解析失败：把整段当译文，原文留空
+    // 结构化内容不完整时返回明确错误，避免把说明文字误当成译文。
     TranslateResult::err(
         "PARSE",
         "模型返回格式异常，未能解析原文和译文".into(),
@@ -854,9 +900,9 @@ fn extract_json_braces(s: &str) -> String {
 /// 从 JSON 文本里取 original 和 translated
 fn parse_json_content(s: &str) -> Option<(String, String)> {
     let v: serde_json::Value = serde_json::from_str(s).ok()?;
-    let orig = v["original"].as_str().unwrap_or("").to_string();
-    let trans = v["translated"].as_str().unwrap_or("").to_string();
-    if orig.is_empty() && trans.is_empty() {
+    let orig = v.get("original")?.as_str()?.to_string();
+    let trans = v.get("translated")?.as_str()?.to_string();
+    if orig.trim().is_empty() || trans.trim().is_empty() {
         return None;
     }
     Some((orig, trans))
@@ -910,8 +956,9 @@ fn build_client() -> reqwest::Client {
 #[cfg(test)]
 mod tests {
     use super::{
-        align_overlay_lines, build_llm_prompt, compress_for_multimodal, llm_translate_with_config,
-        parse_content, preview, prompt,
+        align_overlay_lines, build_llm_prompt, build_openai_text_body, compress_for_multimodal,
+        is_official_deepseek_endpoint, llm_translate_with_config, parse_content, preview, prompt,
+        should_retry_deepseek_json, DEEPSEEK_JSON_MAX_TOKENS,
     };
     use base64::Engine;
 
@@ -932,6 +979,55 @@ mod tests {
         );
         assert!(fenced.success);
         assert_eq!(fenced.translated, "temple");
+
+        let wrapped = parse_content(
+            "model",
+            "结果如下：{\"original\":\"world\",\"translated\":\"世界\"}。",
+        );
+        assert!(wrapped.success);
+        assert_eq!(wrapped.original, "world");
+    }
+
+    #[test]
+    fn rejects_incomplete_or_empty_model_json() {
+        for content in [
+            r#"{"original":"hello"}"#,
+            r#"{"translated":"你好"}"#,
+            r#"{"original":"","translated":"你好"}"#,
+            "",
+        ] {
+            let result = parse_content("model", content);
+            assert!(!result.success, "unexpectedly accepted {content}");
+            assert_eq!(result.error_code.as_deref(), Some("PARSE"));
+            assert!(should_retry_deepseek_json(&result));
+        }
+    }
+
+    #[test]
+    fn official_deepseek_text_requests_use_json_mode() {
+        let config = crate::config::Config {
+            llm_base_url: "https://api.deepseek.com/v1".into(),
+            ..Default::default()
+        };
+        let body = build_openai_text_body(&config, "Return JSON");
+
+        assert!(is_official_deepseek_endpoint(&config.llm_base_url));
+        assert_eq!(body["response_format"]["type"], "json_object");
+        assert_eq!(body["max_tokens"], DEEPSEEK_JSON_MAX_TOKENS);
+        assert_eq!(body["messages"][0]["content"], "Return JSON");
+    }
+
+    #[test]
+    fn custom_openai_endpoints_do_not_receive_deepseek_json_parameters() {
+        let config = crate::config::Config {
+            llm_base_url: "https://proxy.example/deepseek.com".into(),
+            ..Default::default()
+        };
+        let body = build_openai_text_body(&config, "Return JSON");
+
+        assert!(!is_official_deepseek_endpoint(&config.llm_base_url));
+        assert!(body.get("response_format").is_none());
+        assert!(body.get("max_tokens").is_none());
     }
 
     #[test]
