@@ -45,10 +45,9 @@ jobs:
           releaseBody: |
             TempleFix v__VERSION__
 
-            - 新增首次启动欢迎向导与未配置 API Key 的友好状态
-            - 新增中英双语语言入口及 7 种界面语言
-            - 新增签名自动更新（当前使用 GitHub 正式源）
-            - 改进 OCR、结果展示与失败回退
+            - 修复隐藏到系统托盘后仍占用全局 ESC 键的问题
+            - DeepSeek 官方接口启用 JSON Mode，并在格式异常时自动重试
+            - 更严格地拒绝空内容、缺字段和无效 JSON，减少错误翻译结果
           releaseDraft: true
           prerelease: false
           uploadUpdaterJson: true
